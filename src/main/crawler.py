@@ -143,11 +143,6 @@ class Crawler:
 
                 # Convert URL to absolute
                 absUrl = urljoin(currentUrl, href)
-                # Remove any fragment
-                if '#' in href:
-                    fullUrl = fullUrl
-                else:
-                    fullUrl = urldefrag(fullUrl)[0]
 
                 # Make sure link is within the base domain and hasn't been visited
                 if urlparse(absUrl).netloc == domain and absUrl not in visited:
@@ -378,30 +373,41 @@ class Crawler:
             return identifier
         """
 
-        identifier = (
-                el.get_attribute("name") or
-                el.get_attribute("formcontrolname") or
-                el.get_attribute("id") or
-                el.get_attribute("aria-label") or
-                el.get_attribute("placeholder")
-        )
+        # Selenium
+        if hasattr(el, "get_attribute")and callable(getattr(el, "get_attribute", None)):
+            raw = (
+                    el.get_attribute("name") or
+                    el.get_attribute("formcontrolname") or
+                    el.get_attribute("id") or
+                    el.get_attribute("aria-label") or
+                    el.get_attribute("placeholder")
+            )
+        # beautiful soup
+        else:
+            raw = (
+                    el.get("name") or
+                    el.get("formcontrolname") or
+                    el.get("id") or
+                    el.get("aria-label") or
+                    el.get("placeholder")
+            )
 
-        if not identifier:
+        if not raw:
             return None
 
-        normalized = identifier.lower()
+        normalized = raw.lower()
 
-        junk_keywords = [
+        junkKeywords = [
             "mat-", "mdc-", "cdk-", "ng-",
             "slider", "toggle", "checkbox",
             "submit", "reset", "button",
             "unnamed", "go to file", "input:"
         ]
 
-        if any(junk in normalized for junk in junk_keywords):
+        if any(junk in normalized for junk in junkKeywords):
             return None
 
         if len(normalized.strip()) < 3:
             return None
 
-        return identifier.strip()
+        return raw.strip()
