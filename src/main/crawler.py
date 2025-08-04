@@ -7,10 +7,11 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs, urldefrag
+import re
 
 class Crawler:
 
-    def __init__(self, mode='both', maxPages= 5, rateLimit=0.0, headless= True, outputToFile=False):
+    def __init__(self, mode='both', maxPages= 5, rateLimit=0.0, headless= True, outputToFile=False, isDVWA= False):
         # Crawler settings
         self.mode = mode
         self.maxPages = maxPages if maxPages is not None else 0
@@ -22,11 +23,21 @@ class Crawler:
         self.discoveredEndpoints = []
         self.discoveredForms = []
 
+        # FOR dvwa
+        self.isDVWA = isDVWA
+        self.session = requests.Session() if isDVWA else None
+
     def crawl (self, startUrl):
         """
         Crawl from starting url using the set mode, either static or dynamic
         return self.discoveredEndpoints, self.discoveredForms
         """
+
+        if self.isDVWA:
+            loggedIn = self.login(startUrl)
+            if not loggedIn:
+                print("[!] DVWA Login failed!")
+                return [], []
 
         self.discoveredEndpoints = []
         self.discoveredForms = []
@@ -105,7 +116,7 @@ class Crawler:
             if self.maxPages and pagesCrawled >= self.maxPages:
                 break
             try:
-                response = requests.get(currentUrl)
+                response = self.session.get(currentUrl) if self.isDVWA else requests.get(currentUrl)
             except requests.RequestException as e:
                 # On error requesting notify
                 print (f"Request Failed: {e}")
@@ -239,6 +250,14 @@ class Crawler:
         options.add_experimental_option("excludeSwitches", ["enable-logging"])
 
         driver = webdriver.Chrome(options=options)
+
+        baseUrl = f"{urlparse(startUrl).scheme}://{urlparse(startUrl).netloc}"
+        if self.isDVWA:
+            loggedIn = self.seleniumLogin(driver, baseUrl)
+            if not loggedIn:
+                print("[!] Selenium login failed. Aborting dynamic crawl.")
+                driver.quit()
+                return [], []
 
         visited = set()
         queue = [startUrl]
@@ -411,3 +430,103 @@ class Crawler:
             return None
 
         return raw.strip()
+
+    def login(self, startUrl):
+        """
+            Log in to DVWA using default credentials and set security to low
+        """
+
+        parsed = urlparse(startUrl)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+
+        loginUrl = f"{base}/login.php"
+        securityUrl = f"{base}/security.php"
+
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+                "Referer": base,
+            }
+
+            loginPage = self.session.get(loginUrl, headers=headers)
+            # print("[DEBUG] Login page response\n:", loginPage.text)
+
+            tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', loginPage.text)
+
+            token = tokenMatch.group(1) if tokenMatch else ''
+            # print(f"[DEBUG] CSRF token from login page:{token}")
+
+            if not token:
+                print("[!] Could not extract CSRF token from login page!")
+
+                return False
+
+            loginData = {
+                "username": "admin",
+                "password": "password",
+                "Login": "Login",
+                "user_token": token
+            }
+
+            res = self.session.post(loginUrl, data=loginData,headers=headers)
+
+            if "Login failed" in res.text:
+                print("[!] Login failed. Check credentials.")
+                return False
+
+            securityPage = self.session.get(securityUrl, headers= headers)
+            tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', securityPage.text)
+            token = tokenMatch.group(1) if tokenMatch else ''
+
+            securityData = {
+                "security": "low",
+                "seclev_submit": "Submit",
+                "user_token": token
+            }
+
+            self.session.post(securityUrl, data=securityData, headers= headers)
+            # print("[+] Logged in to DVWA and set security level to low")
+
+            return True
+
+        except requests.RequestException as e:
+            print(f"[!] Login request failed: {e}")
+            return False
+
+    def seleniumLogin(self, driver, baseUrl):
+        """
+            Log in to DVWA using Selenium
+        """
+
+        loginUrl = urljoin(baseUrl, "/login.php")
+        driver.get(loginUrl)
+
+        try:
+            # Wait until login form loads
+            WebDriverWait(driver, 1).until(expected_conditions.presence_of_element_located((By.NAME, "username")))
+
+            driver.find_element(By.NAME, "username").send_keys("admin")
+            driver.find_element(By.NAME, "password").send_keys("password")
+
+            # Submit form
+            driver.find_element(By.NAME, "Login").click()
+
+            WebDriverWait(driver, 2).until(expected_conditions.url_contains("index.php"))
+
+            # Go to security page and set to low
+            driver.get(urljoin(baseUrl, "/security.php"))
+            WebDriverWait(driver, 5).until(expected_conditions.presence_of_element_located((By.NAME, "security")))
+
+            dropdown = driver.find_element(By.NAME, "security")
+            for option in dropdown.find_elements(By.TAG_NAME, "option"):
+                if option.get_attribute("value") == "low":
+                    option.click()
+
+            driver.find_element(By.NAME, "seclev_submit").click()
+            # print("[+] Logged in to DVWA via Selenium and set security to low")
+
+            return True
+
+        except Exception as e:
+            print(f"[!] Selenium login failed: {e}")
+            return False

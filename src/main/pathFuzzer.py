@@ -9,13 +9,14 @@ from crawler import Crawler
 
 class PathFuzzer:
 
-    def __init__(self, baseUrl, useCrawler = False, wordlistPath= None, outputToFile = False, maxDepth= 3, isDVWA =False):
+    def __init__(self, baseUrl, useCrawler = False, wordlistPath= None, outputToFile = False, maxDepth= 3, isDVWA =False, isSilent= False):
         self.baseUrl = baseUrl
         self.useCrawler = useCrawler
         self.wordlistPath = wordlistPath
         self.outputToFile = outputToFile
         self.maxDepth =  maxDepth
         self.payloads = self.loadWordlist()
+        self.isSilent = isSilent
 
         # For testing
         self.isDVWA = isDVWA
@@ -122,7 +123,7 @@ class PathFuzzer:
                     continue
 
                 self.visitedPaths.add(targetUrl)
-                tasks.append(executor.submit(self.sendRequest, targetUrl, currDepth))
+                tasks.append(executor.submit(self.sendRequest, targetUrl, currDepth, isParamFuzzing=False,payload=payload))
 
             for future in as_completed(tasks):
                 result  = future.result()
@@ -135,16 +136,41 @@ class PathFuzzer:
         for (nextPath, nextDepth) in results:
             self.fuzzPath(nextPath, currDepth=nextDepth)
 
-    def sendRequest(self, url, depth):
+    def sendRequest(self, url, depth, isParamFuzzing= False,payload= None):
         """
             Send a single GET request and check for success
         """
         try:
-            response = self.session.get(url, headers=self.headers, timeout=5)
+            # Check if DVWA and add token
+            if self.isDVWA and self.userToken:
+                separator = '&' if '?' in url else '?'
+                url = f"{url}{separator}user_token={self.userToken}"
+
+            response = self.session.get(url, headers=self.headers, timeout=5, allow_redirects= False)
+
+            # Refresh token
+            if self.isDVWA:
+                tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]',response.text )
+                if tokenMatch:
+                    self.userToken = tokenMatch.group(1)
+
             if self.isPathTraversalSuccess(response, url):
 
-                self.vulnerablePaths.append(url)
-                return urlparse(url).path, depth + 1
+                result = {
+                    "url": url if isParamFuzzing else urlparse(url).path,
+                    "payload": payload,
+                    "type": "param" if isParamFuzzing else "path",
+                    "depth": depth + 1 if not isParamFuzzing else 0
+                }
+
+                if not isParamFuzzing:
+                    self.vulnerablePaths.append(result)
+
+                return result
+
+        except requests.exceptions.Timeout:
+            # When fuzzing large endpoints timeouts overwhelm, disable if needed
+            pass
 
         except requests.RequestException as e:
             print(f"[!] Request failed for {url}: {e}")
@@ -164,32 +190,23 @@ class PathFuzzer:
         baseNoQuery = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
         originalQuery = parsed.query
 
-        vulnerable = []
+        tasks = []
+        results = []
 
-        for payload in self.payloads:
-            # Replace FUZZ with the payload
-            fuzzedQuery = originalQuery.replace("FUZZ", payload)
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            for payload in self.payloads:
+                # Replace FUZZ with the payload
+                fuzzedQuery = originalQuery.replace("FUZZ", payload)
 
-            if self.isDVWA and self.userToken:
-                fuzzedQuery += f"&user_token={self.userToken}"
-            fullUrl = f"{baseNoQuery}?{fuzzedQuery}"
+                fullUrl = f"{baseNoQuery}?{fuzzedQuery}"
 
-            try:
-                response = self.session.get(fullUrl, headers=self.headers, timeout=5, allow_redirects=False)
+                tasks.append(executor.submit(self.sendRequest, fullUrl, 0, isParamFuzzing=True, payload= payload))
 
-                # print("[DEBUG] Final URL:", response.url)
-                # print(f"[DEBUG] Trying: {fullUrl}")
-                # print(f"[DEBUG] Status: {response.status_code}, Length: {len(response.text)}")
-
-                if self.isPathTraversalSuccess(response, fullUrl):
-                    # print(f"[+] Vulnerability found at: {fullUrl}")
-                    vulnerable.append(fullUrl)
-                    self.vulnerablePaths.append(fullUrl)
-
-            except requests.RequestException as e:
-                print(f"[!] Failed to fuzz with {payload}: {e}")
-
-        return vulnerable
+            for future in as_completed(tasks):
+                result = future.result()
+                if result:
+                    results.append(result)
+        return results
 
     def login(self):
         """
@@ -240,7 +257,7 @@ class PathFuzzer:
             }
 
             self.session.post(securityUrl, data=securityData, headers= self.headers)
-            print("[+] Logged in to DVWA and set security level to low")
+            # print("[+] Logged in to DVWA and set security level to low")
 
             return True
 
@@ -254,12 +271,14 @@ class PathFuzzer:
         """
 
         paths, endpoints = self.getInitalPaths()
+        results = []
 
         # If any endpoints with query params exist FUZZ
         if fuzzParams:
             for ep in endpoints:
                 if ep["params"]:
-                    self.fuzzParams(ep)
+                    paramResults = self.fuzzParams(ep)
+                    results.extend(paramResults)
 
         # Fuzz discovered or base paths
         if fuzzPaths:
@@ -268,17 +287,23 @@ class PathFuzzer:
                 # print(f"Fuzzing: {path}")
                 self.fuzzPath(path)
 
-        if self.outputToFile:
-            with open("pathFuzzerOutput.txt", "w") as f:
-                for vuln in self.vulnerablePaths:
-                    f.write(f"{vuln}\n")
-        else:
-            if self.vulnerablePaths:
-                print("\n[+] Vulnerabilities found at:")
-                for path in self.vulnerablePaths:
-                    print(f"  - {path}")
-            else:
-                print("[-] No vulnerabilities found.")
+        combined = results + [
+            {"url": result["url"], "payload": result["payload"], "type": "path"}
+            for result in self.vulnerablePaths
+        ]
+
+        # Remove dups
+        seen = set()
+        uniqueResults = []
+
+        for r in combined:
+            key = (r["type"], r["url"], r["payload"])
+            if key not in seen:
+                seen.add(key)
+                uniqueResults.append(r)
+
+        return uniqueResults
+
 
 if __name__ == "__main__":
 
@@ -301,16 +326,24 @@ if __name__ == "__main__":
         useCrawler=args.use_crawler,
         wordlistPath=args.wordlist,
         outputToFile=args.output_to_file,
-        isDVWA=args.dvwa
+        isDVWA=args.dvwa,
+        isSilent=True
     )
 
-    if args.fuzz_params and not args.fuzz_paths:
-        fuzzer.run(fuzzParams=True, fuzzPaths=False)
+    results = fuzzer.run(fuzzParams=args.fuzz_params, fuzzPaths=args.fuzz_paths)
 
-    elif args.fuzz_paths and not args.fuzz_params:
-        fuzzer.run(fuzzParams=False, fuzzPaths=True)
+    if results:
+        print("\n[+] Vulnerabilities discovered:")
+
+        for vuln in results:
+            print(f"  - Type: {vuln['type'].upper()}, URL: {vuln['url']}, Payload: {vuln['payload']}")
+
+        if args.output_to_file:
+            with open("pathFuzzerOutput.txt", "w") as f:
+                for vuln in results:
+                    f.write(f"{vuln['type'].upper()} | {vuln['url']} | Payload: {vuln['payload']}\n")
 
     else:
-        fuzzer.run(fuzzParams=True, fuzzPaths=True)
+        print("[-] No vulnerabilities found.")
 
 

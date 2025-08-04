@@ -1,6 +1,8 @@
 import argparse
 from crawler import Crawler
 from pathFuzzer import PathFuzzer
+from urllib.parse import urlparse, urljoin
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def main():
 
@@ -28,7 +30,8 @@ def main():
             maxPages=args.max_pages,
             rateLimit=args.rate_limit,
             headless= not args.no_headless,
-            outputToFile=args.output_to_file
+            outputToFile=args.output_to_file,
+            isDVWA = args.dvwa
         )
 
         print("\n[+] Starting Crawler...")
@@ -62,21 +65,133 @@ def main():
             print("The Fuzzer requires a --wordlist to run")
             return
 
-        if args.fuzz_paths and args.fuzz_params:
-            print( "\n[+] Starting Path and Parameter fuzzing...")
-        elif args.fuzz_paths:
-            print("\n[+] Starting Path Traversal Fuzzing...")
-        elif args.fuzz_params:
-            print("\n[+] Starting Parameter Traversal Fuzzing...")
+        if args.use_crawler:
 
-        fuzzer = PathFuzzer(
-            baseUrl=args.start_url,
-            useCrawler= args.use_crawler,
-            wordlistPath= args.wordlist,
-            outputToFile=args.output_to_file,
-            isDVWA= args.dvwa
-        )
-        fuzzer.run(fuzzParams=args.fuzz_params, fuzzPaths=args.fuzz_paths)
+            allVulnerabilities = []
+
+            print("\n[+] Using crawler to discover endpoints...")
+
+            crawler = Crawler(
+                mode= args.mode,
+                maxPages= args.max_pages,
+                rateLimit= args.rate_limit,
+                headless=not args.no_headless,
+                outputToFile= args.output_to_file,
+                isDVWA= args.dvwa
+            )
+            endpoints, _ = crawler.crawl(args.start_url)
+
+            if not endpoints:
+
+                print("[-] No endpoints found by crawler.")
+                return
+
+            parsed = urlparse(args.start_url)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+
+            print(f"[+] {len(endpoints)} endpoints discovered. Beginning fuzzing... \n")
+
+            def fuzz(ep):
+                """
+                    To allow for parallel calls
+                """
+
+                results = []
+
+                rawUrl = ep["url"]
+                params = ep.get("params", [])
+                fullUrl = rawUrl if rawUrl.startswith("http") else urljoin(base, rawUrl)
+
+                if args.fuzz_paths:
+
+                    print(f"[Thread] Path Fuzzing: {fullUrl}")
+
+                    fuzzer = PathFuzzer(
+                        baseUrl= fullUrl,
+                        useCrawler= False,
+                        wordlistPath =args.wordlist,
+                        outputToFile= args.output_to_file,
+                        isDVWA= args.dvwa,
+                        isSilent = True
+                    )
+
+                    res = fuzzer.run(fuzzParams=False, fuzzPaths=True)
+                    if res:
+                        results.extend(res)
+
+                if args.fuzz_params and params:
+
+                    fuzzQuery = "&".join([f"{p}=FUZZ" for p in params])
+                    fuzzedUrl = f"{fullUrl}?{fuzzQuery}" if "?" not in fullUrl else f"{fullUrl}&{fuzzQuery}"
+
+                    print(f"[Thread] Param Fuzzing: {fuzzedUrl}")
+
+                    fuzzer = PathFuzzer(
+                        baseUrl= fuzzedUrl,
+                        useCrawler= False,
+                        wordlistPath= args.wordlist,
+                        outputToFile= args.output_to_file,
+                        isDVWA= args.dvwa,
+                        isSilent= True
+                    )
+
+                    res = fuzzer.run(fuzzParams=True, fuzzPaths=False)
+                    if res:
+                        results.extend(res)
+                return results
+
+            print(f"\n[+] {len(endpoints)} endpoints discovered. Starting threaded fuzzing... \n")
+
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                futures = [executor.submit(fuzz, ep) for ep in endpoints]
+
+                for future in as_completed(futures):
+                    results = future.result()
+                    allVulnerabilities.extend(results)
+
+            if allVulnerabilities:
+                print("\n[+] Vulnerabilities discovered:")
+
+                for vuln in allVulnerabilities:
+                    print(f"  - Type: {vuln['type']}, URL: {vuln['url']}, Payload: {vuln['payload']}")
+
+                if args.output_to_file:
+                    with open("pathFuzzerOutput.txt", "w") as f:
+                        for vuln in allVulnerabilities:
+
+                            f.write(f"{vuln['type'].upper()} | {vuln['url']} | Payload: {vuln['payload']}\n")
+
+
+            else:
+                print("[-] No vulnerabilities found.")
+
+        else:
+            # Fuzz a single target
+            fuzzer = PathFuzzer(
+                baseUrl=args.start_url,
+                useCrawler=False,
+                wordlistPath=args.wordlist,
+                outputToFile=args.output_to_file,
+                isDVWA=args.dvwa,
+                isSilent = True
+            )
+
+            results = fuzzer.run(fuzzParams=args.fuzz_params, fuzzPaths=args.fuzz_paths)
+
+            if results:
+                print("\n[+] Vulnerabilities discovered:")
+
+                for vuln in results:
+                    print(f"  - Type: {vuln['type']}, URL: {vuln['url']}, Payload: {vuln['payload']}")
+
+                if args.output_to_file:
+                    with open("pathFuzzerOutput.txt", "w") as f:
+                        for vuln in results:
+                            f.write(f"{vuln['type'].upper()} | {vuln['url']} | Payload: {vuln['payload']}\n")
+
+            else:
+                print("[-] No vulnerabilities found.")
+
 
 if __name__ == "__main__":
     main()
