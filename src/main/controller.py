@@ -153,13 +153,21 @@ def main():
                 print("\n[+] Vulnerabilities discovered:")
 
                 for vuln in allVulnerabilities:
-                    print(f"  - Type: {vuln['type']}, URL: {vuln['url']}, Payload: {vuln['payload']}")
+                    print(f"  - [{vuln['type'].upper()}] {vuln['url']}")
+                    print(f"    Payload:       {vuln['payload']}")
+                    print(f"    Status Code:   {vuln.get('status_code', 'N/A')}")
+                    print(f"    Indicator Hit: {vuln.get('indicator', 'N/A')}")
+                    print()
 
                 if args.output_to_file:
-                    with open("pathFuzzerOutput.txt", "w") as f:
+                    with open("pathFuzzerOutput.txt", "w", encoding="utf-8") as f:
                         for vuln in allVulnerabilities:
-
-                            f.write(f"{vuln['type'].upper()} | {vuln['url']} | Payload: {vuln['payload']}\n")
+                            f.write(f"[{vuln['type'].upper()}] {vuln['url']}\n")
+                            f.write(f"  Payload:       {vuln['payload']}\n")
+                            f.write(f"  Status Code:   {vuln.get('status_code', 'N/A')}\n")
+                            f.write(f"  Indicator Hit: {vuln.get('indicator', 'N/A')}\n")
+                            f.write(f"  Snippet:       {vuln.get('response_snippet', '').replace(chr(10), ' ')[:200]}\n")
+                            f.write("-" * 50 + "\n")
 
 
             else:
@@ -182,12 +190,21 @@ def main():
                 print("\n[+] Vulnerabilities discovered:")
 
                 for vuln in results:
-                    print(f"  - Type: {vuln['type']}, URL: {vuln['url']}, Payload: {vuln['payload']}")
+                    print(f"  - [{vuln['type'].upper()}] {vuln['url']}")
+                    print(f"    Payload:       {vuln['payload']}")
+                    print(f"    Status Code:   {vuln['status_code']}")
+                    print(f"    Indicator Hit: {vuln.get('indicator', 'N/A')}")
+                    print()
 
                 if args.output_to_file:
                     with open("pathFuzzerOutput.txt", "w") as f:
                         for vuln in results:
-                            f.write(f"{vuln['type'].upper()} | {vuln['url']} | Payload: {vuln['payload']}\n")
+                            f.write(f"[{vuln['type'].upper()}] {vuln['url']}\n")
+                            f.write(f"  Payload:       {vuln['payload']}\n")
+                            f.write(f"  Status Code:   {vuln['status_code']}\n")
+                            f.write(f"  Indicator Hit: {vuln.get('indicator', 'N/A')}\n")
+                            f.write(f"  Snippet:       {vuln.get('response_snippet', '').replace(chr(10), ' ')[:200]}\n")
+                            f.write("-" * 50 + "\n")
 
             else:
                 print("[-] No vulnerabilities found.")

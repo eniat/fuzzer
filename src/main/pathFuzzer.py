@@ -29,10 +29,11 @@ class PathFuzzer:
 
         self.indicators = [
             "root:x:0:0", "daemon:x", "bin:x", "/bin/bash",
-            "[boot loader]", "[extensions]", "boot.ini",
+            "[boot loader]", "[extensions]", "multi(0)disk(0)rdisk(0)",
             "illegal file type", "enoent", "eacces", "failed to open stream",
             "stack trace", " at /", "open '/etc/passwd'", "cannot open file",
-            "no such file or directory", "permission denied", "failed opening required"
+            "permission denied", "failed opening required", "linux version",
+            "include(", "require(", "c:\\windows\\system32","\\r\\n", "<drive>",
         ]
         self.headers = {
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
@@ -84,18 +85,15 @@ class PathFuzzer:
         """
             Detect success based on response
         """
-        if response.status_code != 200:
-            return False
-
         content = response.text.lower()
 
-        # print(f"[DEBUG] Response preview: {content[:300]}")
+        # Check for indicators in response
         for indicator in self.indicators:
             if indicator in content:
-                # print(f"[DEBUG] Matched indicator '{indicator}' in response from {url}")
-                return True
+                #print(f"[DEBUG] Matched indicator '{indicator}' in response from {url}")
+                return indicator
 
-        return any(indicator in content for indicator in self.indicators)
+        return None
 
     def  fuzzPath(self, path, currDepth= 0):
         """
@@ -118,6 +116,7 @@ class PathFuzzer:
                 fullPath = basePath + payload
 
                 targetUrl = f"{base}/{fullPath.lstrip('/')}"
+                # print(targetUrl)
 
                 if targetUrl in self.visitedPaths:
                     continue
@@ -128,7 +127,8 @@ class PathFuzzer:
             for future in as_completed(tasks):
                 result  = future.result()
                 if result :
-                    foundPath, newDepth = result
+                    foundPath = result["url"]
+                    newDepth = result["depth"]
                     fullUrl = f"{base}{foundPath}"
                     print(f"[+] Vulnerability found at: {fullUrl }")
                     results.append((foundPath, newDepth))
@@ -154,13 +154,18 @@ class PathFuzzer:
                 if tokenMatch:
                     self.userToken = tokenMatch.group(1)
 
-            if self.isPathTraversalSuccess(response, url):
+            indicator = self.isPathTraversalSuccess(response,url)
+
+            if indicator:
 
                 result = {
                     "url": url if isParamFuzzing else urlparse(url).path,
                     "payload": payload,
                     "type": "param" if isParamFuzzing else "path",
-                    "depth": depth + 1 if not isParamFuzzing else 0
+                    "depth": depth + 1 if not isParamFuzzing else 0,
+                    "status_code": response.status_code,
+                    "indicator": indicator,
+                    "response_snippet": response.text[:200]
                 }
 
                 if not isParamFuzzing:
@@ -177,7 +182,7 @@ class PathFuzzer:
 
         return None
 
-    def fuzzParams(self, endpoint):
+    def fuzzParams(self):
         """
             Fuzz query params
         """
@@ -277,7 +282,7 @@ class PathFuzzer:
         if fuzzParams:
             for ep in endpoints:
                 if ep["params"]:
-                    paramResults = self.fuzzParams(ep)
+                    paramResults = self.fuzzParams()
                     results.extend(paramResults)
 
         # Fuzz discovered or base paths
