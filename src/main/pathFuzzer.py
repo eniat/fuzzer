@@ -2,6 +2,7 @@ from urllib.parse import urljoin, urlparse, parse_qs, urldefrag
 import requests
 import argparse
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath
 from difflib import SequenceMatcher
@@ -27,6 +28,7 @@ class PathFuzzer:
         # results storage
         self.visitedPaths = set()
         self.vulnerablePaths = []
+        self.lock = threading.Lock()
 
         self.indicators = [
             "root:x:0:0", "daemon:x", "bin:x", "/bin/bash",
@@ -93,7 +95,7 @@ class PathFuzzer:
 
         # Check for indicators in response
         for indicator in self.indicators:
-            if indicator in content:
+            if re.search(rf'\b{re.escape(indicator)}\b', content):
                 #print(f"[DEBUG] Matched indicator '{indicator}' in response from {url}")
                 return "vulnerable", indicator
 
@@ -125,10 +127,11 @@ class PathFuzzer:
                 targetUrl = f"{base}/{fullPath.lstrip('/')}"
                 # print(targetUrl)
 
-                if targetUrl in self.visitedPaths:
-                    continue
+                with self.lock:
+                    if targetUrl in self.visitedPaths:
+                        continue
+                    self.visitedPaths.add(targetUrl)
 
-                self.visitedPaths.add(targetUrl)
                 tasks.append(executor.submit(self.sendRequest, targetUrl, currDepth, isParamFuzzing=False,payload=payload))
 
             for future in as_completed(tasks):
@@ -138,8 +141,10 @@ class PathFuzzer:
                         result["data"]["url"],
                         result["data"]["depth"]))
 
-        for (nextPath, nextDepth) in interestingResults:
-            self.fuzzPath(nextPath, currDepth=nextDepth)
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(self.fuzzPath, path, nextDepth) for (path, nextDepth) in interestingResults]
+            for future in as_completed(futures):
+                future.result()
 
     def sendRequest(self, url, depth, isParamFuzzing= False,payload= None):
         """
@@ -172,6 +177,22 @@ class PathFuzzer:
                     if not self.isSilent:
                         print(f"[i] Skipping 200 based on similarity ({similarity:.2f}): {url}")
                     return None
+
+                elif status == 200 and similarity < 0.90:
+                    if not self.isSilent:
+
+                        print(f"[+]Discovered interesting path: {url} (Similarity: {similarity:.2f})")
+
+                    result= {"url": urlparse(url).path,
+                             "depth": depth + 1,
+                             "status_code": status,
+                             "payload": payload,
+                             "response_snippet": response.text[:200],
+                             "type": "interesting_200"
+                             }
+
+                    self.vulnerablePaths.append(result)
+                    return {"type": "interesting_200", "data": result}
 
             if resultType == "vulnerable":
 
@@ -344,10 +365,7 @@ class PathFuzzer:
                 # print(f"Fuzzing: {path}")
                 self.fuzzPath(path)
 
-        combined = results + [
-            {"url": result["url"], "payload": result["payload"], "type": "path"}
-            for result in self.vulnerablePaths
-        ]
+        combined = results + self.vulnerablePaths
 
         # Remove dups
         seen = set()
@@ -393,12 +411,21 @@ if __name__ == "__main__":
         print("\n[+] Vulnerabilities discovered:")
 
         for vuln in results:
-            print(f"  - Type: {vuln['type'].upper()}, URL: {vuln['url']}, Payload: {vuln['payload']}")
+            print(f"  - [{vuln['type'].upper()}] {vuln['url']}")
+            print(f"    Payload:       {vuln['payload']}")
+            print(f"    Status Code:   {vuln.get('status_code', 'N/A')}")
+            print(f"    Indicator Hit: {vuln.get('indicator', 'N/A')}")
+            print()
 
         if args.output_to_file:
-            with open("pathFuzzerOutput.txt", "w") as f:
+            with open("pathFuzzerOutput.txt", "w", encoding="utf-8") as f:
                 for vuln in results:
-                    f.write(f"{vuln['type'].upper()} | {vuln['url']} | Payload: {vuln['payload']}\n")
+                    f.write(f"[{vuln['type'].upper()}] {vuln['url']}\n")
+                    f.write(f"  Payload:       {vuln['payload']}\n")
+                    f.write(f"  Status Code:   {vuln.get('status_code', 'N/A')}\n")
+                    f.write(f"  Indicator Hit: {vuln.get('indicator', 'N/A')}\n")
+                    f.write(f"  Snippet:       {vuln.get('response_snippet', '').replace(chr(10), ' ')[:200]}\n")
+                    f.write("-" * 50 + "\n")
 
     else:
         print("[-] No vulnerabilities found.")
