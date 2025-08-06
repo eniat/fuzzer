@@ -4,6 +4,7 @@ import argparse
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath
+from difflib import SequenceMatcher
 
 from crawler import Crawler
 
@@ -39,6 +40,8 @@ class PathFuzzer:
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
             "Referer": self.baseUrl,
         }
+
+        self.baseline = self.getBaseline()
 
         if isDVWA:
             self.login()
@@ -86,14 +89,18 @@ class PathFuzzer:
             Detect success based on response
         """
         content = response.text.lower()
+        status = response.status_code
 
         # Check for indicators in response
         for indicator in self.indicators:
             if indicator in content:
                 #print(f"[DEBUG] Matched indicator '{indicator}' in response from {url}")
-                return indicator
+                return "vulnerable", indicator
 
-        return None
+        if status == 200:
+            return "interesting", None
+
+        return "none", None
 
     def  fuzzPath(self, path, currDepth= 0):
         """
@@ -103,7 +110,7 @@ class PathFuzzer:
             return
 
         tasks = []
-        results = []
+        interestingResults  = []
 
         parsed = urlparse(self.baseUrl)
         base = f"{parsed.scheme}://{parsed.netloc}"
@@ -126,14 +133,12 @@ class PathFuzzer:
 
             for future in as_completed(tasks):
                 result  = future.result()
-                if result :
-                    foundPath = result["url"]
-                    newDepth = result["depth"]
-                    fullUrl = f"{base}{foundPath}"
-                    print(f"[+] Vulnerability found at: {fullUrl }")
-                    results.append((foundPath, newDepth))
+                if result and result["type"] == "interesting":
+                    interestingResults.append((
+                        result["data"]["url"],
+                        result["data"]["depth"]))
 
-        for (nextPath, nextDepth) in results:
+        for (nextPath, nextDepth) in interestingResults:
             self.fuzzPath(nextPath, currDepth=nextDepth)
 
     def sendRequest(self, url, depth, isParamFuzzing= False,payload= None):
@@ -154,9 +159,21 @@ class PathFuzzer:
                 if tokenMatch:
                     self.userToken = tokenMatch.group(1)
 
-            indicator = self.isPathTraversalSuccess(response,url)
+            resultType, indicator = self.isPathTraversalSuccess(response,url)
+            status = response.status_code
 
-            if indicator:
+            if resultType == "interesting" and not isParamFuzzing and self.baseline:
+
+                baselineText = self.baseline["content"]
+                responseText = response.text
+                similarity = SequenceMatcher(None, baselineText, responseText).ratio()
+
+                if status == self.baseline["status_code"] and similarity >= 0.90:
+                    if not self.isSilent:
+                        print(f"[i] Skipping 200 based on similarity ({similarity:.2f}): {url}")
+                    return None
+
+            if resultType == "vulnerable":
 
                 result = {
                     "url": url if isParamFuzzing else urlparse(url).path,
@@ -171,7 +188,25 @@ class PathFuzzer:
                 if not isParamFuzzing:
                     self.vulnerablePaths.append(result)
 
-                return result
+                return {"type": "vulnerable", "data": result}
+
+            elif resultType == "interesting" and not isParamFuzzing:
+
+                #Prevent recursion on files
+                parsed = urlparse(url).path.lower()
+
+                if parsed.endswith('.php') or '.php/' in parsed or '.ini' in parsed:
+                    return None
+
+                return {
+                    "type": "interesting",
+                    "data": {
+                        "url": urlparse(url).path,
+                        "depth": depth + 1,
+                        "status_code": status,
+                        "payload": payload
+                    }
+                }
 
         except requests.exceptions.Timeout:
             # When fuzzing large endpoints timeouts overwhelm, disable if needed
@@ -209,8 +244,8 @@ class PathFuzzer:
 
             for future in as_completed(tasks):
                 result = future.result()
-                if result:
-                    results.append(result)
+                if result and "data" in result:
+                    results.append(result["data"])
         return results
 
     def login(self):
@@ -269,6 +304,23 @@ class PathFuzzer:
         except requests.RequestException as e:
             print(f"[!] Login request failed: {e}")
             return False
+
+    def getBaseline(self):
+        """
+            Help path fuzzing with false positives
+        """
+        testPath = "/thisshouldnotexist143903458903527903452"
+        testUrl = urljoin(self.baseUrl, testPath)
+
+        try:
+            res = self.session.get(testUrl, headers=self.headers, timeout=5)
+            return {
+                "status_code": res.status_code,
+                "content": res.text
+            }
+        except Exception as e:
+            print( f"[!] Could not get baseline signature:{e}")
+            return None
 
     def run(self,fuzzParams= True, fuzzPaths=True):
         """
