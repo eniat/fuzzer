@@ -3,6 +3,18 @@ from crawler import Crawler
 from pathFuzzer import PathFuzzer
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import PurePosixPath
+
+def getdirectories(path):
+
+    exts = ('.php', '.html', '.asp', '.aspx', '.jsp', '.py', '.rb', '.zip')
+    segments = path.rstrip("/").split("/")
+
+    if segments and any(segments[-1].lower().endswith(ext) for ext in exts):
+        segments = segments[:-1]
+
+    baseDir = "/" + "/".join(segments) if segments else "/"
+    return str(PurePosixPath(baseDir))
 
 def main():
 
@@ -67,6 +79,10 @@ def main():
 
         if args.use_crawler:
 
+            globalVisitedPaths = set()
+            globalVisitedFuzzPaths = set()
+
+
             allVulnerabilities = []
 
             print("\n[+] Using crawler to discover endpoints...")
@@ -88,6 +104,25 @@ def main():
 
             parsed = urlparse(args.start_url)
             base = f"{parsed.scheme}://{parsed.netloc}"
+
+            if args.fuzz_paths:
+
+                uniqueUrls = {}
+                for ep in endpoints:
+                    parsedPath = urlparse(ep["url"]).path or "/"
+                    baseDir = str(PurePosixPath(getdirectories(parsedPath))).rstrip("/")
+
+                    if baseDir not in uniqueUrls:
+                        uniqueUrls[baseDir] = ep
+                UniqueEndpoints = list(uniqueUrls.values())
+
+            else:
+                UniqueEndpoints = endpoints
+
+            for ep in UniqueEndpoints:
+                p = urlparse(ep["url"]).path or "/"
+                d = getdirectories(p)
+                globalVisitedPaths.add(d)
 
             print(f"[+] {len(endpoints)} endpoints discovered. Beginning fuzzing... \n")
 
@@ -114,6 +149,8 @@ def main():
                         isDVWA= args.dvwa,
                         isSilent = True
                     )
+                    fuzzer.visitedPaths = globalVisitedPaths
+                    fuzzer.visitedFuzzPaths = globalVisitedFuzzPaths
 
                     res = fuzzer.run(fuzzParams=False, fuzzPaths=True)
                     if res:
@@ -134,6 +171,8 @@ def main():
                         isDVWA= args.dvwa,
                         isSilent= True
                     )
+                    fuzzer.visitedPaths = globalVisitedPaths
+                    fuzzer.visitedFuzzPaths = globalVisitedFuzzPaths
 
                     res = fuzzer.run(fuzzParams=True, fuzzPaths=False)
                     if res:
@@ -143,11 +182,12 @@ def main():
             print(f"\n[+] {len(endpoints)} endpoints discovered. Starting threaded fuzzing... \n")
 
             with ThreadPoolExecutor(max_workers=20) as executor:
-                futures = [executor.submit(fuzz, ep) for ep in endpoints]
+                futures = [executor.submit(fuzz, ep) for ep in UniqueEndpoints]
 
                 for future in as_completed(futures):
                     results = future.result()
                     allVulnerabilities.extend(results)
+
 
             if allVulnerabilities:
                 print("\n[+] Vulnerabilities discovered:")

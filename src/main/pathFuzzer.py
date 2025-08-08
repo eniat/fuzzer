@@ -27,6 +27,7 @@ class PathFuzzer:
 
         # results storage
         self.visitedPaths = set()
+        self.visitedFuzzPaths = set()
         self.vulnerablePaths = []
         self.lock = threading.Lock()
 
@@ -42,6 +43,7 @@ class PathFuzzer:
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
             "Referer": self.baseUrl,
         }
+        self.excludedExtensions = ['.php', '.js', '.css', '.png', '.jpg', '.json']
 
         self.baseline = self.getBaseline()
 
@@ -70,6 +72,11 @@ class PathFuzzer:
             crawler = Crawler(outputToFile= False)
             endpoints, _ = crawler.crawl(self.baseUrl)
             allPaths = set()
+
+            # To filter none fuzzable paths from crawler
+            def isFuzzable(path):
+                return not any(path.lower().endswith(ext) for ext in self.excludedExtensions)
+
             for ep in endpoints:
                 url = ep["url"]
                 path = PurePosixPath(url)
@@ -80,7 +87,17 @@ class PathFuzzer:
 
                 allPaths.add(str(path))
 
-            return list(allPaths), endpoints
+            filteredPaths = [p for p in allPaths if isFuzzable(p)]
+
+            normalizedSeen = set()
+            uniquePaths = []
+            for p in filteredPaths:
+                norm = str(PurePosixPath(p))
+                if norm not in normalizedSeen:
+                    normalizedSeen.add(norm)
+                    uniquePaths.append(p)
+
+            return uniquePaths, endpoints
         # If crawler isn't wanted uses baseUrl as starting point
         else:
             parsed = urlparse(self.baseUrl)
@@ -108,6 +125,24 @@ class PathFuzzer:
         """
             Fuzz the URL path using the payload
         """
+        segments = path.strip("/").split("/")
+
+        for i, segment in enumerate(segments):
+            if any(segment.endswith(ext) for ext in self.excludedExtensions):
+                path = "/" if i == 0 else "/" + "/".join(segments[:i])
+                break
+
+        normalizedPath = str(PurePosixPath(path))
+        if normalizedPath != "/" and normalizedPath.endswith("/"):
+            normalizedPath = normalizedPath.rstrip("/")
+
+        with self.lock:
+            if normalizedPath in self.visitedFuzzPaths:
+                if not self.isSilent:
+                    print(f"[DEDUP] Skipping already fuzzed base path: {normalizedPath}")
+                return
+            self.visitedFuzzPaths.add(normalizedPath)
+
         if currDepth > self.maxDepth:
             return
 
@@ -124,15 +159,16 @@ class PathFuzzer:
                 basePath = path if path.endswith('/') else path + '/'
                 fullPath = basePath + payload
 
-                targetUrl = f"{base}/{fullPath.lstrip('/')}"
-                # print(targetUrl)
+                normalizedPayloadPath = PurePosixPath(fullPath).as_posix().rstrip("/") or "/"
 
                 with self.lock:
-                    if targetUrl in self.visitedPaths:
+                    if normalizedPayloadPath in self.visitedPaths:
                         continue
-                    self.visitedPaths.add(targetUrl)
+                    self.visitedPaths.add(normalizedPayloadPath)
 
-                tasks.append(executor.submit(self.sendRequest, targetUrl, currDepth, isParamFuzzing=False,payload=payload))
+                targetUrl = f"{base}/{fullPath.lstrip('/')}"
+
+                tasks.append(executor.submit( self.sendRequest, targetUrl, currDepth,isParamFuzzing= False, payload =payload))
 
             for future in as_completed(tasks):
                 result  = future.result()
@@ -142,7 +178,20 @@ class PathFuzzer:
                         result["data"]["depth"]))
 
         with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(self.fuzzPath, path, nextDepth) for (path, nextDepth) in interestingResults]
+
+            futures = []
+            for (interestingPath, nextDepth) in interestingResults:
+                normalized = PurePosixPath(interestingPath).as_posix().rstrip("/") or "/"
+
+                with self.lock:
+                    if normalized in self.visitedFuzzPaths:
+                        if not self.isSilent:
+                            print(f"[DEDUP] Skipping recursive interesting path: {normalized}")
+                        continue
+
+                    self.visitedFuzzPaths.add(normalized)
+                futures.append(executor.submit(self.fuzzPath, interestingPath, nextDepth))
+
             for future in as_completed(futures):
                 future.result()
 
@@ -156,7 +205,7 @@ class PathFuzzer:
                 separator = '&' if '?' in url else '?'
                 url = f"{url}{separator}user_token={self.userToken}"
 
-            response = self.session.get(url, headers=self.headers, timeout=5, allow_redirects= False)
+            response = self.session.get(url, headers=self.headers, timeout=2, allow_redirects= False)
 
             # Refresh token
             if self.isDVWA:
@@ -171,7 +220,7 @@ class PathFuzzer:
 
                 baselineText = self.baseline["content"]
                 responseText = response.text
-                similarity = SequenceMatcher(None, baselineText, responseText).ratio()
+                similarity = SequenceMatcher(None, baselineText, responseText).quick_ratio()
 
                 if status == self.baseline["status_code"] and similarity >= 0.90:
                     if not self.isSilent:
@@ -216,7 +265,7 @@ class PathFuzzer:
                 #Prevent recursion on files
                 parsed = urlparse(url).path.lower()
 
-                if parsed.endswith('.php') or '.php/' in parsed or '.ini' in parsed:
+                if any(parsed.endswith(ext) for ext in self.excludedExtensions) or '.php/' in parsed:
                     return None
 
                 return {
@@ -234,7 +283,8 @@ class PathFuzzer:
             pass
 
         except requests.RequestException as e:
-            print(f"[!] Request failed for {url}: {e}")
+            if not self.isSilent:
+                print(f"[!] Request failed for {url}: {e}")
 
         return None
 
@@ -334,13 +384,14 @@ class PathFuzzer:
         testUrl = urljoin(self.baseUrl, testPath)
 
         try:
-            res = self.session.get(testUrl, headers=self.headers, timeout=5)
+            res = self.session.get(testUrl, headers=self.headers, timeout=2)
             return {
                 "status_code": res.status_code,
                 "content": res.text
             }
         except Exception as e:
-            print( f"[!] Could not get baseline signature:{e}")
+            if not self.isSilent:
+                print( f"[!] Could not get baseline signature:{e}")
             return None
 
     def run(self,fuzzParams= True, fuzzPaths=True):
