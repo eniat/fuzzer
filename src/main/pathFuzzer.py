@@ -31,6 +31,7 @@ class PathFuzzer:
         self.vulnerablePaths = []
         self.lock = threading.Lock()
 
+        # Below subject to change, just for filtering or vulnerability detection
         self.indicators = [
             "root:x:0:0", "daemon:x", "bin:x", "/bin/bash",
             "[boot loader]", "[extensions]", "multi(0)disk(0)rdisk(0)",
@@ -55,13 +56,17 @@ class PathFuzzer:
         """
             Load payload from wordlist
         """
+        # Check if list is passed
+        if isinstance(self.wordlistPath, list):
+            return self.wordlistPath
+
         try:
             with open(self.wordlistPath, 'r', encoding='utf-8', errors='replace') as f:
                 # Strips the lines
                 return [line.strip() for line in f if line.strip()]
         except Exception as e :
             # On error raise exception
-            raise RuntimeError( f"Failed to load wordlist from {self.wordlistPath}: {e}")
+            raise RuntimeError( f"[-] Failed to load wordlist from {self.wordlistPath}: {e}")
 
     def getInitalPaths(self):
         """
@@ -87,8 +92,8 @@ class PathFuzzer:
 
                 allPaths.add(str(path))
 
+            # Normalize and de duplicate
             filteredPaths = [p for p in allPaths if isFuzzable(p)]
-
             normalizedSeen = set()
             uniquePaths = []
             for p in filteredPaths:
@@ -116,6 +121,7 @@ class PathFuzzer:
                 #print(f"[DEBUG] Matched indicator '{indicator}' in response from {url}")
                 return "vulnerable", indicator
 
+        # If 200 but no indicators deem interesting
         if status == 200:
             return "interesting", None
 
@@ -126,7 +132,7 @@ class PathFuzzer:
             Fuzz the URL path using the payload
         """
         segments = path.strip("/").split("/")
-
+        # Shorten the path if it ends with one of the self.excludedExtensions
         for i, segment in enumerate(segments):
             if any(segment.endswith(ext) for ext in self.excludedExtensions):
                 path = "/" if i == 0 else "/" + "/".join(segments[:i])
@@ -138,8 +144,8 @@ class PathFuzzer:
 
         with self.lock:
             if normalizedPath in self.visitedFuzzPaths:
-                if not self.isSilent:
-                    print(f"[DEDUP] Skipping already fuzzed base path: {normalizedPath}")
+                # if not self.isSilent:
+                #     print(f"[DEBUG] Skipping already fuzzed base path: {normalizedPath}")
                 return
             self.visitedFuzzPaths.add(normalizedPath)
 
@@ -153,7 +159,7 @@ class PathFuzzer:
         base = f"{parsed.scheme}://{parsed.netloc}"
 
         with ThreadPoolExecutor(max_workers= 20) as executor:
-
+            # Fuzz with all paylaods
             for payload in self.payloads:
                 # Check for /
                 basePath = path if path.endswith('/') else path + '/'
@@ -178,15 +184,15 @@ class PathFuzzer:
                         result["data"]["depth"]))
 
         with ThreadPoolExecutor(max_workers=10) as executor:
-
+            # Recurse on new 200 paths that are interesting
             futures = []
             for (interestingPath, nextDepth) in interestingResults:
                 normalized = PurePosixPath(interestingPath).as_posix().rstrip("/") or "/"
 
                 with self.lock:
                     if normalized in self.visitedFuzzPaths:
-                        if not self.isSilent:
-                            print(f"[DEDUP] Skipping recursive interesting path: {normalized}")
+                        # if not self.isSilent:
+                        #     #print(f"[DEBUG] Skipping recursive interesting path: {normalized}")
                         continue
 
                     self.visitedFuzzPaths.add(normalized)
@@ -222,15 +228,15 @@ class PathFuzzer:
                 responseText = response.text
                 similarity = SequenceMatcher(None, baselineText, responseText).quick_ratio()
 
+                # If too similar skip as false positive
                 if status == self.baseline["status_code"] and similarity >= 0.90:
-                    if not self.isSilent:
-                        print(f"[i] Skipping 200 based on similarity ({similarity:.2f}): {url}")
+                    # if not self.isSilent:
+                    #     print(f"[i] Skipping 200 based on similarity ({similarity:.2f}): {url}")
                     return None
 
                 elif status == 200 and similarity < 0.90:
-                    if not self.isSilent:
-
-                        print(f"[+]Discovered interesting path: {url} (Similarity: {similarity:.2f})")
+                    # if not self.isSilent:
+                    #     print(f"[+]Discovered interesting path: {url} (Similarity: {similarity:.2f})")
 
                     result= {"url": urlparse(url).path,
                              "depth": depth + 1,

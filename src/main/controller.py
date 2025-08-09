@@ -1,11 +1,17 @@
 import argparse
-from crawler import Crawler
-from pathFuzzer import PathFuzzer
+
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath
 
+from crawler import Crawler
+from pathFuzzer import PathFuzzer
+from llm import filterML
+
 def getdirectories(path):
+    """
+        Helper for stripping filenames and only leaving directories
+    """
 
     exts = ('.php', '.html', '.asp', '.aspx', '.jsp', '.py', '.rb', '.zip')
     segments = path.rstrip("/").split("/")
@@ -30,9 +36,40 @@ def main():
     parser.add_argument("--fuzz-params", action="store_true", help="Enable parameter fuzzing")
     parser.add_argument("--wordlist", type=str, help="Path to payload wordlist for fuzzing")
     parser.add_argument("--output-to-file", action="store_true", help="Save output to a file")
+    parser.add_argument("--llm", type =str, help="Natural language prompt to filter the wordlist using local ML")
+
     # Testing specific
     parser.add_argument("--dvwa", action="store_true", help="Enable auto-login for DVWA")
     args = parser.parse_args()
+
+    # if --llm is used wordlist needs to be provided
+    if args.llm and not args.wordlist:
+        print("[-] You must provide --wordlist when using --llm.")
+        return
+
+    # If using the llm takes the wordlist and filters it based on the prompt
+    if args.llm:
+        try:
+
+            print(f"[+]Filtering wordlist using LLM prompt:'{args.llm}'")
+            filtered = filterML(args.wordlist, args.llm, similarityThreshold=0.4)
+
+            if not filtered:
+                print("[-] No payloads matched the LLM prompt")
+                return
+
+            args.wordlist = filtered
+
+            # For debugging of the LLM
+            # print("[+] Matched payloads:")
+            # for p in filtered:
+            #     print(f"   {p}")
+
+            print(f"[+] {len(filtered)} payloads remain after filtering.\n")
+
+        except Exception as e:
+            print(f"[!] Failed to apply LLM filtering: {e}")
+            return
 
     # If no fuzzer selected run crawler on its own
     if not args.fuzz_paths and not args.fuzz_params:
@@ -79,9 +116,9 @@ def main():
 
         if args.use_crawler:
 
+            # Global storage to remove duplicate fuzzing
             globalVisitedPaths = set()
             globalVisitedFuzzPaths = set()
-
 
             allVulnerabilities = []
 
@@ -102,11 +139,12 @@ def main():
                 print("[-] No endpoints found by crawler.")
                 return
 
+            # Derive base url for relative links
             parsed = urlparse(args.start_url)
             base = f"{parsed.scheme}://{parsed.netloc}"
 
             if args.fuzz_paths:
-
+                # Filter to unique base directories
                 uniqueUrls = {}
                 for ep in endpoints:
                     parsedPath = urlparse(ep["url"]).path or "/"
@@ -119,6 +157,7 @@ def main():
             else:
                 UniqueEndpoints = endpoints
 
+            #  Add to visited directories
             for ep in UniqueEndpoints:
                 p = urlparse(ep["url"]).path or "/"
                 d = getdirectories(p)
@@ -139,6 +178,7 @@ def main():
 
                 if args.fuzz_paths:
 
+                    # Path traversal fuzzing
                     print(f"[Thread] Path Fuzzing: {fullUrl}")
 
                     fuzzer = PathFuzzer(
@@ -158,6 +198,7 @@ def main():
 
                 if args.fuzz_params and params:
 
+                    # Param fuzzing
                     fuzzQuery = "&".join([f"{p}=FUZZ" for p in params])
                     fuzzedUrl = f"{fullUrl}?{fuzzQuery}" if "?" not in fullUrl else f"{fullUrl}&{fuzzQuery}"
 
@@ -180,16 +221,16 @@ def main():
                 return results
 
             print(f"\n[+] {len(endpoints)} endpoints discovered. Starting threaded fuzzing... \n")
-
             with ThreadPoolExecutor(max_workers=20) as executor:
+                # Run fuzzer using threads accross all endpoints
                 futures = [executor.submit(fuzz, ep) for ep in UniqueEndpoints]
 
                 for future in as_completed(futures):
                     results = future.result()
                     allVulnerabilities.extend(results)
 
-
             if allVulnerabilities:
+                # Out put results if any returned
                 print("\n[+] Vulnerabilities discovered:")
 
                 for vuln in allVulnerabilities:
