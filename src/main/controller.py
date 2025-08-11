@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 from crawler import Crawler
 from pathFuzzer import PathFuzzer
 from llm import filterML
+from xssFuzzer import XSSFuzzer
 
 def getdirectories(path):
     """
@@ -28,12 +29,16 @@ def main():
 
     parser.add_argument("start_url", help="The starting URL")
     parser.add_argument("--use-crawler", action="store_true", help="Use crawler to discover paths before fuzzing")
-    parser.add_argument("--mode", choices=["static", "dynamic", "both"], default="both",help="Crawling mode. Default = both")
+    parser.add_argument("--crawler-mode", choices=["static", "dynamic", "both"], default="both",help="Crawling mode. Default = both")
     parser.add_argument("--max-pages", type=int, default=10, help="Max pages to crawl")
     parser.add_argument("--rate-limit", type=float, default=0.0,help="Delay between requests. Default = 0.0")
     parser.add_argument("--no-headless", action="store_true", help="Run browser in headless")
     parser.add_argument("--fuzz-paths", action="store_true", help="Enable path traversal fuzzing")
-    parser.add_argument("--fuzz-params", action="store_true", help="Enable parameter fuzzing")
+    parser.add_argument("--fuzz-params", action="store_true", help="Enable parameter fuzzing. (requires FUZZ in url)")
+    parser.add_argument("--xss-params", action="store_true", help="Enable XSS parameter fuzzing. (requires FUZZ in url)")
+    parser.add_argument("--xss-forms", action="store_true", help="Enable XSS form fuzzing. (requires crawler to be used)")
+    parser.add_argument("--xss-stored", action="store_true",help="Enable stored XSS fuzzing. (requires crawler to be used)")
+    parser.add_argument("--xss-dom", action="store_true",help="Enable dom XSS fuzzing")
     parser.add_argument("--wordlist", type=str, help="Path to payload wordlist for fuzzing")
     parser.add_argument("--output-to-file", action="store_true", help="Save output to a file")
     parser.add_argument("--llm", type =str, help="Natural language prompt to filter the wordlist using local ML")
@@ -72,7 +77,12 @@ def main():
             return
 
     # If no fuzzer selected run crawler on its own
-    if not args.fuzz_paths and not args.fuzz_params:
+    if (not args.fuzz_paths
+            and not args.fuzz_params
+            and not args.xss_params
+            and not args.xss_forms
+            and not args.xss_stored
+            and not args.xss_dom):
 
         crawler = Crawler(
             mode=args.mode,
@@ -262,45 +272,72 @@ def main():
 
         else:
             # Fuzz a single target
-            fuzzer = PathFuzzer(
-                baseUrl=args.start_url,
-                useCrawler=False,
-                wordlistPath=args.wordlist,
-                outputToFile=args.output_to_file,
-                isDVWA=args.dvwa,
-                isSilent = True
-            )
+            if args.xss_params:
 
-            results = fuzzer.run(fuzzParams=args.fuzz_params, fuzzPaths=args.fuzz_paths)
+                fuzzer = XSSFuzzer(
+                    baseUrl=args.start_url,
+                    useCrawler=False,
+                    wordlistPath=args.wordlist,
+                    outputToFile=args.output_to_file,
+                    isDVWA=args.dvwa,
+                    isSilent=True
+                )
 
-            if results:
-                print("\n[+] Vulnerabilities discovered:")
+                results = fuzzer.paramXSS()
 
-                for vuln in results:
-                    if vuln["type"] == "interesting_200":
-                        print(f"  - [INTERESTING 200] {vuln['url']}")
-                    else:
-                        print(f"  - [{vuln['type'].upper()}] {vuln['url']}")
-                    print(f"    Payload:       {vuln['payload']}")
-                    print(f"    Status Code:   {vuln.get('status_code', 'N/A')}")
-                    print(f"    Indicator Hit: {vuln.get('indicator', 'N/A')}")
-                    print()
+                if results:
+                    print("\n[+] XSS vulnerabilities discovered:")
+                    for vuln in results:
+                        print(f"  - [XSS] {vuln['url']}")
+                        print(f"    Payload:       {vuln['payload']}")
+                        print(f"    Status Code:   {vuln.get('status_code', 'N/A')}")
+                        print(f"    Snippet:       {vuln.get('snippet', '')}")
+                        print()
 
-                if args.output_to_file:
-                    with open("pathFuzzerOutput.txt", "w", encoding = "utf-8", errors= "replace") as f:
-                        for vuln in results:
-                            if vuln["type"] == "interesting_200":
-                                f.write(f"  - [INTERESTING 200] {vuln['url']}\n")
-                            else:
-                                f.write(f"  - [{vuln['type'].upper()}] {vuln['url']}\n")
-                            f.write(f"  Payload:       {vuln['payload']}\n")
-                            f.write(f"  Status Code:   {vuln.get('status_code', 'N/A')}\n")
-                            f.write(f"  Indicator Hit: {vuln.get('indicator', 'N/A')}\n")
-                            f.write(f"  Snippet:       {vuln.get('response_snippet', '').replace(chr(10), ' ')[:200]}\n")
-                            f.write("-" * 50 + "\n")
+                else:
+                    print("[-] No XSS vulnerabilities found.")
 
             else:
-                print("[-] No vulnerabilities found.")
+
+                fuzzer = PathFuzzer(
+                    baseUrl=args.start_url,
+                    useCrawler=False,
+                    wordlistPath=args.wordlist,
+                    outputToFile=args.output_to_file,
+                    isDVWA=args.dvwa,
+                    isSilent = True
+                )
+
+                results = fuzzer.run(fuzzParams=args.fuzz_params, fuzzPaths=args.fuzz_paths)
+
+                if results:
+                    print("\n[+] Vulnerabilities discovered:")
+
+                    for vuln in results:
+                        if vuln["type"] == "interesting_200":
+                            print(f"  - [INTERESTING 200] {vuln['url']}")
+                        else:
+                            print(f"  - [{vuln['type'].upper()}] {vuln['url']}")
+                        print(f"    Payload:       {vuln['payload']}")
+                        print(f"    Status Code:   {vuln.get('status_code', 'N/A')}")
+                        print(f"    Indicator Hit: {vuln.get('indicator', 'N/A')}")
+                        print()
+
+                    if args.output_to_file:
+                        with open("pathFuzzerOutput.txt", "w", encoding = "utf-8", errors= "replace") as f:
+                            for vuln in results:
+                                if vuln["type"] == "interesting_200":
+                                    f.write(f"  - [INTERESTING 200] {vuln['url']}\n")
+                                else:
+                                    f.write(f"  - [{vuln['type'].upper()}] {vuln['url']}\n")
+                                f.write(f"  Payload:       {vuln['payload']}\n")
+                                f.write(f"  Status Code:   {vuln.get('status_code', 'N/A')}\n")
+                                f.write(f"  Indicator Hit: {vuln.get('indicator', 'N/A')}\n")
+                                f.write(f"  Snippet:       {vuln.get('response_snippet', '').replace(chr(10), ' ')[:200]}\n")
+                                f.write("-" * 50 + "\n")
+
+                else:
+                    print("[-] No vulnerabilities found.")
 
 
 if __name__ == "__main__":

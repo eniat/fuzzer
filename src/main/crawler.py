@@ -9,6 +9,93 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs, urldefrag
 import re
 
+
+def extractIdentifier(el):
+    """
+        Extract identifier finds and filters identifiers for input fields
+        -- Can be edited depending on what to filter/ find
+        return identifier
+    """
+
+    # Selenium
+    if hasattr(el, "get_attribute")and callable(getattr(el, "get_attribute", None)):
+        raw = (
+                el.get_attribute("name") or
+                el.get_attribute("formcontrolname") or
+                el.get_attribute("id") or
+                el.get_attribute("aria-label") or
+                el.get_attribute("placeholder")
+        )
+    # beautiful soup
+    else:
+        raw = (
+                el.get("name") or
+                el.get("formcontrolname") or
+                el.get("id") or
+                el.get("aria-label") or
+                el.get("placeholder")
+        )
+
+    if not raw:
+        return None
+
+    normalized = raw.lower()
+
+    junkKeywords = [
+        "mat-", "mdc-", "cdk-", "ng-",
+        "slider", "toggle", "checkbox",
+        "submit", "reset", "button",
+        "unnamed", "go to file", "input:"
+    ]
+
+    if any(junk in normalized for junk in junkKeywords):
+        return None
+
+    if len(normalized.strip()) < 3:
+        return None
+
+    return raw.strip()
+
+
+def seleniumLogin(driver, baseUrl):
+    """
+        Log in to DVWA using Selenium
+    """
+
+    loginUrl = urljoin(baseUrl, "/login.php")
+    driver.get(loginUrl)
+
+    try:
+        # Wait until login form loads
+        WebDriverWait(driver, 1).until(expected_conditions.presence_of_element_located((By.NAME, "username")))
+
+        driver.find_element(By.NAME, "username").send_keys("admin")
+        driver.find_element(By.NAME, "password").send_keys("password")
+
+        # Submit form
+        driver.find_element(By.NAME, "Login").click()
+
+        WebDriverWait(driver, 2).until(expected_conditions.url_contains("index.php"))
+
+        # Go to security page and set to low
+        driver.get(urljoin(baseUrl, "/security.php"))
+        WebDriverWait(driver, 5).until(expected_conditions.presence_of_element_located((By.NAME, "security")))
+
+        dropdown = driver.find_element(By.NAME, "security")
+        for option in dropdown.find_elements(By.TAG_NAME, "option"):
+            if option.get_attribute("value") == "low":
+                option.click()
+
+        driver.find_element(By.NAME, "seclev_submit").click()
+        # print("[+] Logged in to DVWA via Selenium and set security to low")
+
+        return True
+
+    except Exception as e:
+        print(f"[!] Selenium login failed: {e}")
+        return False
+
+
 class Crawler:
 
     def __init__(self, mode='both', maxPages= 5, rateLimit=0.0, headless= True, outputToFile=False, isDVWA= False):
@@ -212,7 +299,7 @@ class Crawler:
                 # Get clean identifiers
                 fields = []
                 for inp in form.find_all(['input', 'textarea', 'select']):
-                    identifier = self.extractIdentifier(inp)
+                    identifier = extractIdentifier(inp)
                     if identifier:
                         fields.append(identifier)
 
@@ -253,7 +340,7 @@ class Crawler:
 
         baseUrl = f"{urlparse(startUrl).scheme}://{urlparse(startUrl).netloc}"
         if self.isDVWA:
-            loggedIn = self.seleniumLogin(driver, baseUrl)
+            loggedIn = seleniumLogin(driver, baseUrl)
             if not loggedIn:
                 print("[!] Selenium login failed. Aborting dynamic crawl.")
                 driver.quit()
@@ -327,7 +414,7 @@ class Crawler:
 
                 fields = []
                 for el in (inputs + textareas + selects):
-                    identifier = self.extractIdentifier(el)
+                    identifier = extractIdentifier(el)
                     if identifier:
                         fields.append(identifier)
 
@@ -351,7 +438,7 @@ class Crawler:
 
                     fields = []
                     for el in (inputs + textareas + selects):
-                        identifier = self.extractIdentifier(el)
+                        identifier = extractIdentifier(el)
                         if identifier:
                             fields.append(identifier)
 
@@ -384,52 +471,6 @@ class Crawler:
             })
 
         return endpointDicts, dynamicForms
-
-    def extractIdentifier(self, el):
-        """
-            Extract identifier finds and filters identifiers for input fields
-            -- Can be edited depending on what to filter/ find
-            return identifier
-        """
-
-        # Selenium
-        if hasattr(el, "get_attribute")and callable(getattr(el, "get_attribute", None)):
-            raw = (
-                    el.get_attribute("name") or
-                    el.get_attribute("formcontrolname") or
-                    el.get_attribute("id") or
-                    el.get_attribute("aria-label") or
-                    el.get_attribute("placeholder")
-            )
-        # beautiful soup
-        else:
-            raw = (
-                    el.get("name") or
-                    el.get("formcontrolname") or
-                    el.get("id") or
-                    el.get("aria-label") or
-                    el.get("placeholder")
-            )
-
-        if not raw:
-            return None
-
-        normalized = raw.lower()
-
-        junkKeywords = [
-            "mat-", "mdc-", "cdk-", "ng-",
-            "slider", "toggle", "checkbox",
-            "submit", "reset", "button",
-            "unnamed", "go to file", "input:"
-        ]
-
-        if any(junk in normalized for junk in junkKeywords):
-            return None
-
-        if len(normalized.strip()) < 3:
-            return None
-
-        return raw.strip()
 
     def login(self, startUrl):
         """
@@ -493,40 +534,3 @@ class Crawler:
             print(f"[!] Login request failed: {e}")
             return False
 
-    def seleniumLogin(self, driver, baseUrl):
-        """
-            Log in to DVWA using Selenium
-        """
-
-        loginUrl = urljoin(baseUrl, "/login.php")
-        driver.get(loginUrl)
-
-        try:
-            # Wait until login form loads
-            WebDriverWait(driver, 1).until(expected_conditions.presence_of_element_located((By.NAME, "username")))
-
-            driver.find_element(By.NAME, "username").send_keys("admin")
-            driver.find_element(By.NAME, "password").send_keys("password")
-
-            # Submit form
-            driver.find_element(By.NAME, "Login").click()
-
-            WebDriverWait(driver, 2).until(expected_conditions.url_contains("index.php"))
-
-            # Go to security page and set to low
-            driver.get(urljoin(baseUrl, "/security.php"))
-            WebDriverWait(driver, 5).until(expected_conditions.presence_of_element_located((By.NAME, "security")))
-
-            dropdown = driver.find_element(By.NAME, "security")
-            for option in dropdown.find_elements(By.TAG_NAME, "option"):
-                if option.get_attribute("value") == "low":
-                    option.click()
-
-            driver.find_element(By.NAME, "seclev_submit").click()
-            # print("[+] Logged in to DVWA via Selenium and set security to low")
-
-            return True
-
-        except Exception as e:
-            print(f"[!] Selenium login failed: {e}")
-            return False

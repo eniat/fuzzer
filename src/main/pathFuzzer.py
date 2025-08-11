@@ -1,8 +1,8 @@
-from urllib.parse import urljoin, urlparse, parse_qs, urldefrag
 import requests
 import argparse
 import re
 import threading
+from urllib.parse import urljoin, urlparse, parse_qs, urldefrag
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath
 from difflib import SequenceMatcher
