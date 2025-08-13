@@ -5,6 +5,17 @@ from uuid import uuid4
 from html import escape
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+SCRIPT_RE = r"<script[^>]*>.*?<!--\s*({token})\s*-->.*?</script>"
+ATTR_RE   = r"\bon\w+\s*=\s*(['\"]).*?({token}).*?\1"
+JSURL_RE  = r"(?:href|src)\s*=\s*(['\"])\s*javascript:.*?({token}).*?\1"
+
+_regex_cache = {}
+
+SQL = [
+    "you have an error in your sql syntax",
+    "mysql_fetch", "mysqli_", "pg_query", "syntax error at or near",
+    "unclosed quotation mark after the character string", "ora-"
+]
 
 def canary(payload, token):
     """
@@ -13,22 +24,56 @@ def canary(payload, token):
     return f"{payload}<!--{token}-->"
 
 
-def detectXSS(body, token,payload, markedPayload):
+def detectXSS(body, token, markedPayload):
     """
         If token appears then it's worked
     """
-    if token not in body:
+    lowerBody = body.lower()
+    token = token.lower()
+
+    if token not in lowerBody:
         return False
 
     # If only payload appears its usually safe
-    if escape(markedPayload, quote=True) in body:
+    if escape(markedPayload, quote=True).lower() in lowerBody:
         return False
 
-    if f"<!--{token}-->" in body:
+    if token not in _regex_cache:
+        _regex_cache[token] = (
+            re.compile(SCRIPT_RE.format(token=re.escape(token)), re.I | re.S),
+            re.compile(ATTR_RE.format(token=re.escape(token)), re.I | re.S),
+            re.compile(JSURL_RE.format(token=re.escape(token)), re.I | re.S)
+        )
+
+    script_re, attr_re, jsurl_re = _regex_cache[token]
+
+    if script_re.search(body) or attr_re.search(body) or jsurl_re.search(body):
+        return True
+
+    if any(err in lowerBody for err in SQL):
+        return False
+
+    if any(tag in lowerBody for tag in
+           ("<img", "<iframe", "<svg", "<a ", "<input", "<video", "<audio")) and f"<!--{token}-->" in lowerBody:
         return True
 
     return False
 
+def isFuzzableField(field):
+    """
+        Check if form field is fuzzable
+    """
+    if not field:
+        return False
+
+    lowered = field.lower()
+
+    skips = [
+        "user_token", "security", "login", "upload", "change", "submit",
+        "max_file_size", "step", "create_db", "password"
+    ]
+
+    return not any(skip in lowered for skip in skips)
 
 
 
@@ -83,7 +128,7 @@ class XSSFuzzer:
                 separator = '&' if '?' in url else '?'
                 url = f"{url}{separator}user_token={self.userToken}"
 
-            response = self.session.get(url, headers=self.headers, timeout=2, allow_redirects=False)
+            response = self.session.get(url, headers=self.headers, timeout=3, allow_redirects=False)
 
             # Refresh token
             if self.isDVWA:
@@ -92,7 +137,7 @@ class XSSFuzzer:
                     self.userToken = tokenMatch.group(1)
 
 
-            if detectXSS(response.text, self.token, payload, markedPayload):
+            if detectXSS(response.text, self.token, markedPayload):
                 result = {
                     "url": url,
                     "payload": payload,
@@ -144,11 +189,92 @@ class XSSFuzzer:
                     results.append(result["data"])
         return results
 
-    def formXSS(self):
+    def formXSS(self, forms):
         """
             Takes the forms retrieved by the crawler and fuzzes them
         """
-        pass
+        results = []
+
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            for form in forms:
+                tasks = []
+                ctx = {}
+
+                url = form.get("url")
+                method = (form.get("method") or "POST").upper()
+                fields = form.get("formFields") or[]
+
+                if not url or not fields:
+                    continue
+
+                parsed = urlparse(self.baseUrl)
+                if not url.startswith("http"):
+                    url = f"{parsed.scheme}://{parsed.netloc}{url}"
+
+                for raw in self.payloads:
+                    marked = canary(raw, self.token)
+
+                    if method == "POST":
+                        data = {}
+
+                        for field in fields:
+                            if isFuzzableField(field):
+                                data[field] = marked
+
+                            else:
+                                data[field] = "test"
+
+                        if self.isDVWA and self.userToken:
+                            data.setdefault("user_token", self.userToken)
+
+                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=3, allow_redirects=False )
+
+                        tasks.append(fut)
+                        ctx[fut] = (url, raw, marked)
+
+                    else:
+                        params = []
+                        for field in fields:
+                            if isFuzzableField(field):
+                                params.append(f"{field}={quote(marked, safe='')}")
+
+                            else:
+                                params.append(f"{field}=test")
+
+                        separator = "&" if "?" in url else "?"
+                        fullUrl = f"{url}{separator}{'&'.join(params)}"
+
+                        fut = executor.submit( self.session.get, fullUrl, headers=self.headers, timeout=3,allow_redirects=False)
+
+                        tasks.append(fut)
+                        ctx[fut] = (fullUrl, raw,marked)
+
+                for fut in as_completed(tasks):
+                    try:
+                        res = fut.result()
+
+                    except Exception:
+                        continue
+
+                    finUrl, raw, marked = ctx[fut]
+
+                    if self.isDVWA:
+                        tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', res.text)
+
+                        if tokenMatch:
+                            self.userToken = tokenMatch.group(1)
+
+
+                    if detectXSS(res.text, self.token, marked):
+                        results.append({
+                            "url": finUrl,
+                            "payload": raw,
+                            "status_code": res.status_code,
+                            "snippet": res.text[:200]
+                        })
+
+        return results
+
 
     def storedXSS(self):
         """

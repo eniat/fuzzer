@@ -85,7 +85,7 @@ def main():
             and not args.xss_dom):
 
         crawler = Crawler(
-            mode=args.mode,
+            mode=args.crawler_mode,
             maxPages=args.max_pages,
             rateLimit=args.rate_limit,
             headless= not args.no_headless,
@@ -135,14 +135,14 @@ def main():
             print("\n[+] Using crawler to discover endpoints...")
 
             crawler = Crawler(
-                mode= args.mode,
+                mode= args.crawler_mode,
                 maxPages= args.max_pages,
                 rateLimit= args.rate_limit,
                 headless=not args.no_headless,
                 outputToFile= args.output_to_file,
                 isDVWA= args.dvwa
             )
-            endpoints, _ = crawler.crawl(args.start_url)
+            endpoints, forms = crawler.crawl(args.start_url)
 
             if not endpoints:
 
@@ -173,9 +173,9 @@ def main():
                 d = getdirectories(p)
                 globalVisitedPaths.add(d)
 
-            print(f"[+] {len(endpoints)} endpoints discovered. Beginning fuzzing... \n")
+            print(f"[+] {len(endpoints)} endpoints & {len(forms)} forms discovered. Beginning fuzzing... \n")
 
-            def fuzz(ep):
+            def fuzzEndpoint(ep):
                 """
                     To allow for parallel calls
                 """
@@ -228,16 +228,81 @@ def main():
                     res = fuzzer.run(fuzzParams=True, fuzzPaths=False)
                     if res:
                         results.extend(res)
+
+                if args.xss_params and params:
+
+                    # XSS fuzzing via params
+                    fuzzQuery = "&".join([f"{p}=FUZZ" for p in params])
+                    fuzzedUrl = f"{fullUrl}?{fuzzQuery}" if "?" not in fullUrl else f"{fullUrl}&{fuzzQuery}"
+
+                    print(f"[Thread] XSS Param Fuzzing: {fuzzedUrl}")
+
+                    fuzzer = XSSFuzzer(
+                        baseUrl= fuzzedUrl,
+                        useCrawler=False,
+                        wordlistPath=args.wordlist,
+                        outputToFile=args.output_to_file,
+                        isDVWA=args.dvwa,
+                        isSilent =True
+                    )
+
+                    res = fuzzer.paramXSS()
+
+                    if res:
+                        for vuln in res:
+                            vuln["type"] = "xss"
+
+                        results.extend(res)
+
                 return results
 
-            print(f"\n[+] {len(endpoints)} endpoints discovered. Starting threaded fuzzing... \n")
-            with ThreadPoolExecutor(max_workers=20) as executor:
-                # Run fuzzer using threads accross all endpoints
-                futures = [executor.submit(fuzz, ep) for ep in UniqueEndpoints]
+            def fuzzForm(form):
 
-                for future in as_completed(futures):
-                    results = future.result()
-                    allVulnerabilities.extend(results)
+                results = []
+
+                if args.xss_forms:
+
+                    print(f"[Thread] XSS Form Fuzzing: {form.get('url')}")
+                    fuzzer = XSSFuzzer(
+                        baseUrl=args.start_url,
+                        useCrawler=False,
+                        wordlistPath=args.wordlist,
+                        outputToFile=args.output_to_file,
+                        isDVWA=args.dvwa,
+                        isSilent=True
+                    )
+
+                    res = fuzzer.formXSS([form])
+
+                    if res:
+                        for vuln in res:
+                            vuln["type"] = "xss_form"
+
+                        results.extend(res)
+
+                return results
+
+            if args.fuzz_paths or args.fuzz_params or args.xss_params:
+                print(f"\n[+] Starting threaded fuzzing on {len(endpoints)} endpoints... \n")
+                with ThreadPoolExecutor(max_workers=20) as executor:
+                    # Run fuzzer using threads across all endpoints
+                    futures = [executor.submit(fuzzEndpoint, ep) for ep in UniqueEndpoints]
+
+                    for future in as_completed(futures):
+                        results = future.result()
+                        allVulnerabilities.extend(results)
+
+            if args.xss_forms:
+                print(f"\n[+] Starting threaded fuzzing on {len(forms)} Forms... \n")
+                with ThreadPoolExecutor(max_workers=20) as executor:
+                    # Run fuzzer using threads across all forms
+                    futures = [executor.submit(fuzzForm, form) for form in forms]
+
+                    for future in as_completed(futures):
+                        res = future.result()
+                        if res:
+                            allVulnerabilities.extend(res)
+
 
             if allVulnerabilities:
                 # Out put results if any returned
