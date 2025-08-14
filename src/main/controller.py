@@ -147,7 +147,8 @@ def main():
             if not endpoints:
 
                 print("[-] No endpoints found by crawler.")
-                return
+                if not (args.xss_forms or args.xss_stored):
+                    return
 
             # Derive base url for relative links
             parsed = urlparse(args.start_url)
@@ -260,9 +261,13 @@ def main():
 
                 results = []
 
+                fullUrl = form.get("url")
+                if fullUrl and not fullUrl.startswith("http"):
+                    fullUrl = urljoin(base, fullUrl)
+
                 if args.xss_forms:
 
-                    print(f"[Thread] XSS Form Fuzzing: {form.get('url')}")
+                    print(f"[Thread] XSS Form Fuzzing: {fullUrl}")
                     fuzzer = XSSFuzzer(
                         baseUrl=args.start_url,
                         useCrawler=False,
@@ -280,6 +285,34 @@ def main():
 
                         results.extend(res)
 
+                if args.xss_stored:
+
+                    print(f"[Thread] XSS Stored Fuzzing: {fullUrl}")
+                    fuzzer = XSSFuzzer(
+                        baseUrl=args.start_url,
+                        useCrawler= False,
+                        wordlistPath=args.wordlist,
+                        outputToFile=args.output_to_file,
+                        isDVWA=args.dvwa,
+                        isSilent=True
+                    )
+
+                    # Pass directories of forms/ shared directory endpoints
+                    formDir = getdirectories(urlparse(fullUrl).path)
+                    relevantEndpoints = [
+                        ep["url"] if ep["url"].startswith("http") else urljoin(base, ep["url"])
+                        for ep in endpoints
+                        if getdirectories(urlparse(ep["url"]).path) == formDir
+                    ]
+
+                    res = fuzzer.storedXSS([form], endpoints=relevantEndpoints)
+
+                    if res:
+                        for vuln in res:
+                            vuln["type"] = "xss_stored"
+
+                        results.extend(res)
+
                 return results
 
             if args.fuzz_paths or args.fuzz_params or args.xss_params:
@@ -292,7 +325,7 @@ def main():
                         results = future.result()
                         allVulnerabilities.extend(results)
 
-            if args.xss_forms:
+            if args.xss_forms or args.xss_stored:
                 print(f"\n[+] Starting threaded fuzzing on {len(forms)} Forms... \n")
                 with ThreadPoolExecutor(max_workers=20) as executor:
                     # Run fuzzer using threads across all forms
@@ -319,7 +352,7 @@ def main():
                     print()
 
                 if args.output_to_file:
-                    with open("pathFuzzerOutput.txt", "w", encoding="utf-8", errors="replace") as f:
+                    with open("FuzzerOutput.txt", "w", encoding="utf-8", errors="replace") as f:
                         for vuln in allVulnerabilities:
                             if vuln["type"] == "interesting_200":
                                 f.write(f"  - [INTERESTING 200] {vuln['url']}\n")

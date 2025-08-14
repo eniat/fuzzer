@@ -39,6 +39,10 @@ def detectXSS(body, token, markedPayload):
         return False
 
     if token not in _regex_cache:
+
+        if len(_regex_cache) >= 32:
+            _regex_cache.clear()
+
         _regex_cache[token] = (
             re.compile(SCRIPT_RE.format(token=re.escape(token)), re.I | re.S),
             re.compile(ATTR_RE.format(token=re.escape(token)), re.I | re.S),
@@ -276,11 +280,161 @@ class XSSFuzzer:
         return results
 
 
-    def storedXSS(self):
+    def storedXSS(self, forms,endpoints=None):
         """
             Submits payload then revisits to see if payload still there
         """
-        pass
+        results = []
+        pages = set()
+
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            for form in forms:
+                tasks = []
+                ctx = {}
+
+                url = form.get("url")
+                method = (form.get("method") or "POST").upper()
+                fields = form.get("formFields") or []
+
+                if not url or not fields:
+                    continue
+
+                parsed = urlparse(self.baseUrl)
+                if not url.startswith("http"):
+                    url = f"{parsed.scheme}://{parsed.netloc}{url}"
+
+                pages.add(url)
+
+                for raw in self.payloads:
+                    marked = canary(raw,self.token)
+
+                    if method == "POST":
+                        data = {}
+
+                        for field in fields:
+                            if isFuzzableField(field):
+                                data[field] = marked
+
+                            else:
+                                data[field] = "test"
+
+                        if self.isDVWA and self.userToken:
+                            data.setdefault("user_token", self.userToken)
+
+                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=3,allow_redirects=False)
+
+                        tasks.append(fut)
+                        ctx[fut] = (url,raw,marked)
+
+                    else:
+                        params = []
+
+                        for field in fields:
+                            if isFuzzableField(field):
+                                params.append(f"{field}={quote(marked, safe='')}")
+
+                            else:
+                                params.append(f"{field}=test")
+
+                        separator = "&" if "?" in url else "?"
+                        fullUrl = f"{url}{separator}{'&'.join(params)}"
+
+                        fut = executor.submit(self.session.get, fullUrl, headers=self.headers, timeout=3,allow_redirects=False)
+
+                        tasks.append(fut)
+                        ctx[fut] = (fullUrl, raw, marked)
+
+                for fut in as_completed(tasks):
+                    try:
+                        res = fut.result()
+
+                    except Exception:
+                        continue
+
+                    finUrl, raw, marked = ctx[fut]
+
+                    if self.isDVWA:
+                        tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', res.text)
+
+                        if tokenMatch:
+                            self.userToken = tokenMatch.group(1)
+
+
+                    if detectXSS(res.text, self.token, marked):
+                        results.append({
+                            "url": finUrl,
+                            "payload": raw,
+                            "status_code": res.status_code,
+                            "snippet": res.text[:200]
+                        })
+
+                    if res.status_code in (301, 302, 303,307, 308):
+                        loc = res.headers.get("Location")
+                        if loc:
+                            pages.add(loc if loc.startswith("http")else urljoin(finUrl, loc))
+
+        if endpoints:
+            parsed = urlparse(self.baseUrl)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+
+            for end in endpoints:
+                if not end:
+                    continue
+
+                pages.add(end if end.startswith("http") else f"{base}{end}")
+
+        markedPayloads = [(raw, canary(raw, self.token)) for raw in self.payloads]
+
+        with ThreadPoolExecutor(max_workers=20) as executor:
+
+            futToPage = {
+                executor.submit(self.session.get,page
+                if (not (self.isDVWA and self.userToken)) else
+                    f"{page}{'&' if '?' in page else '?'}user_token={self.userToken}",
+                    headers=self.headers,
+                    timeout=3,
+                    allow_redirects=True
+                ): page
+                for page in pages
+            }
+
+            for fut in as_completed(futToPage):
+
+                finUrl = futToPage[fut]
+                try:
+                    res = fut.result()
+
+                except Exception:
+                    continue
+
+                # Refresh DVWA token if needed
+                if self.isDVWA:
+                    tokenMatch = re.search(
+                        r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]',
+                        res.text
+                    )
+                    if tokenMatch:
+                        self.userToken = tokenMatch.group(1)
+
+                body = res.text
+                lowerBody = body.lower()
+
+                if self.token.lower() not in lowerBody:
+                    continue
+
+                for raw, marked in markedPayloads:
+                    if detectXSS(body, self.token, marked):
+                        results.append({
+                            "url": finUrl,
+                            "payload": raw,
+                            "status_code": res.status_code,
+                            "snippet": body[:200]
+                        })
+
+                        break
+
+        return results
+
 
     def domXSS(self):
         """

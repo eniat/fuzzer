@@ -51,8 +51,6 @@ def extractIdentifier(el):
     if any(junk in normalized for junk in junkKeywords):
         return None
 
-    if len(normalized.strip()) < 3:
-        return None
 
     return raw.strip()
 
@@ -98,7 +96,7 @@ def seleniumLogin(driver, baseUrl):
 
 class Crawler:
 
-    def __init__(self, mode='both', maxPages= 5, rateLimit=0.0, headless= True, outputToFile=False, isDVWA= False):
+    def __init__(self, mode='both', maxPages= 50, rateLimit=0.0, headless= True, outputToFile=False, isDVWA= False):
         # Crawler settings
         self.mode = mode
         self.maxPages = maxPages if maxPages is not None else 0
@@ -292,7 +290,7 @@ class Crawler:
                 if parsedAction.netloc and parsedAction.netloc != domain:
                     continue
 
-                formPath = parsedAction.path or "/"
+                formPath = f"{parsedAction.scheme}://{parsedAction.netloc}{parsedAction.path or '/'}"
                 if parsedAction.fragment:
                     formPath += "#" + parsedAction.fragment
 
@@ -384,7 +382,6 @@ class Crawler:
 
                     # Make URL absolute
                     absHref = urljoin(url, href)
-                    absHref = urldefrag(absHref)[0] if "#" not in absHref else absHref
 
                     # Stay within the same domain
                     parsed = urlparse(absHref)
@@ -404,7 +401,7 @@ class Crawler:
 
                 # Handle pages where fields are not inside <form> tags
                 parsedCurrentUrl = urlparse(driver.current_url)
-                formPath = parsedCurrentUrl.path or "/"
+                formPath = f"{parsedCurrentUrl.scheme}://{parsedCurrentUrl.netloc}{parsedCurrentUrl.path or '/'}"
                 if parsedCurrentUrl.fragment:
                     formPath += "#" + parsedCurrentUrl.fragment
 
@@ -444,7 +441,7 @@ class Crawler:
 
                     formUrl = urljoin(url, action)
                     parsedForm = urlparse(formUrl)
-                    formPath = parsedForm.path or "/"
+                    formPath = f"{parsedForm.scheme}://{parsedForm.netloc}{parsedForm.path or '/'}"
                     if parsedForm.fragment:
                         formPath += "#" + parsedForm.fragment
 
