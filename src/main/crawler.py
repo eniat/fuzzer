@@ -45,7 +45,8 @@ def extractIdentifier(el):
         "mat-", "mdc-", "cdk-", "ng-",
         "slider", "toggle", "checkbox",
         "submit", "reset", "button",
-        "unnamed", "go to file", "input:"
+        "unnamed", "go to file", "input:",
+        "user_token", "max_file_size", "upload", "change"
     ]
 
     if any(junk in normalized for junk in junkKeywords):
@@ -96,7 +97,7 @@ def seleniumLogin(driver, baseUrl):
 
 class Crawler:
 
-    def __init__(self, mode='both', maxPages= 50, rateLimit=0.0, headless= True, outputToFile=False, isDVWA= False):
+    def __init__(self, mode='both', maxPages= 20, rateLimit=0.0, headless= True, outputToFile=False, isDVWA= False):
         # Crawler settings
         self.mode = mode
         self.maxPages = maxPages if maxPages is not None else 0
@@ -216,7 +217,6 @@ class Crawler:
             # Only parse HTML
             contentType = response.headers.get("Content-Type", "")
             if "text/html" not in contentType:
-                pagesCrawled += 1
                 continue
 
             soup = BeautifulSoup(response.text, "html.parser")
@@ -381,7 +381,7 @@ class Crawler:
                         continue
 
                     # Make URL absolute
-                    absHref = urljoin(url, href)
+                    absHref = urljoin(driver.current_url, href)
 
                     # Stay within the same domain
                     parsed = urlparse(absHref)
@@ -400,28 +400,39 @@ class Crawler:
                     dynamicEndpoints.add((endpointPath, "GET", tuple(params)))
 
                 # Handle pages where fields are not inside <form> tags
-                parsedCurrentUrl = urlparse(driver.current_url)
-                formPath = f"{parsedCurrentUrl.scheme}://{parsedCurrentUrl.netloc}{parsedCurrentUrl.path or '/'}"
-                if parsedCurrentUrl.fragment:
-                    formPath += "#" + parsedCurrentUrl.fragment
+                seenForms = set()
 
-                inputs = driver.find_elements(By.TAG_NAME, "input")
-                textareas = driver.find_elements(By.TAG_NAME, "textarea")
-                selects = driver.find_elements(By.TAG_NAME, "select")
+                allInputs = driver.find_elements(By.TAG_NAME, "input")
+                allTextareas = driver.find_elements(By.TAG_NAME, "textarea")
+                allSelects = driver.find_elements(By.TAG_NAME, "select")
 
-                fields = []
-                for el in (inputs + textareas + selects):
-                    identifier = extractIdentifier(el)
-                    if identifier:
-                        fields.append(identifier)
+                freeFields = []
+                for el in (allInputs+ allTextareas + allSelects):
+                    try:
+                        el.find_element(By.XPATH, "ancestor::form")
 
-                if fields:
-                    dynamicForms.append({
-                        "url": formPath,
-                        "method": "POST",
-                        # remove duplicates
-                        "formFields": list(set(fields))
-                    })
+                    except Exception:
+                        identifier = extractIdentifier(el)
+                        if identifier:
+                            freeFields.append(identifier)
+
+                if freeFields:
+                    parsedCurrentUrl = urlparse(driver.current_url)
+                    formPath = f"{parsedCurrentUrl.scheme}://{parsedCurrentUrl.netloc}{parsedCurrentUrl.path or '/'}"
+
+                    if parsedCurrentUrl.fragment:
+                        formPath += "#" + parsedCurrentUrl.fragment
+
+                    key = (formPath, "POST")
+
+                    if key not in seenForms:
+                        dynamicForms.append({
+                            "url": formPath,
+                            "method": "POST",
+                            "formFields": list(set(freeFields))
+                        })
+
+                        seenForms.add(key)
 
                 # Collect all real <form>
                 forms = driver.find_elements(By.TAG_NAME, "form")
@@ -439,17 +450,22 @@ class Crawler:
                         if identifier:
                             fields.append(identifier)
 
-                    formUrl = urljoin(url, action)
+                    base = driver.current_url
+                    formUrl = urljoin(base, action or base)
                     parsedForm = urlparse(formUrl)
                     formPath = f"{parsedForm.scheme}://{parsedForm.netloc}{parsedForm.path or '/'}"
                     if parsedForm.fragment:
                         formPath += "#" + parsedForm.fragment
 
-                    dynamicForms.append({
-                        "url": formPath,
-                        "method": method.upper(),
-                        "formFields": fields
-                    })
+                    key = (formPath, method.upper())
+                    if key not in seenForms:
+                        dynamicForms.append({
+                            "url": formPath,
+                            "method": method.upper(),
+                            "formFields": fields
+                        })
+                        seenForms.add(key)
+
                 pagesLoaded +=1
 
                 if self.rateLimit:

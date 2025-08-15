@@ -74,7 +74,8 @@ def isFuzzableField(field):
 
     skips = [
         "user_token", "security", "login", "upload", "change", "submit",
-        "max_file_size", "step", "create_db", "password"
+        "max_file_size", "step", "create_db", "password",
+        "btnclear", "btnsign", "default"
     ]
 
     return not any(skip in lowered for skip in skips)

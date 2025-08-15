@@ -7,7 +7,7 @@ from pathlib import PurePosixPath
 from crawler import Crawler
 from pathFuzzer import PathFuzzer
 from llm import filterML
-from xssFuzzer import XSSFuzzer
+from xssFuzzer import XSSFuzzer, isFuzzableField
 
 def getdirectories(path):
     """
@@ -30,7 +30,7 @@ def main():
     parser.add_argument("start_url", help="The starting URL")
     parser.add_argument("--use-crawler", action="store_true", help="Use crawler to discover paths before fuzzing")
     parser.add_argument("--crawler-mode", choices=["static", "dynamic", "both"], default="both",help="Crawling mode. Default = both")
-    parser.add_argument("--max-pages", type=int, default=10, help="Max pages to crawl")
+    parser.add_argument("--max-pages", type=int, default=20, help="Max pages to crawl")
     parser.add_argument("--rate-limit", type=float, default=0.0,help="Delay between requests. Default = 0.0")
     parser.add_argument("--no-headless", action="store_true", help="Run browser in headless")
     parser.add_argument("--fuzz-paths", action="store_true", help="Enable path traversal fuzzing")
@@ -143,6 +143,11 @@ def main():
                 isDVWA= args.dvwa
             )
             endpoints, forms = crawler.crawl(args.start_url)
+
+            forms = [
+                f for f in forms
+                if any(isFuzzableField(field) for field in f.get("formFields", []))
+            ]
 
             if not endpoints:
 
