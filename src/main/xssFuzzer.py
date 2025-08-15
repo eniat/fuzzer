@@ -360,15 +360,6 @@ class XSSFuzzer:
                         if tokenMatch:
                             self.userToken = tokenMatch.group(1)
 
-
-                    if detectXSS(res.text, self.token, marked):
-                        results.append({
-                            "url": finUrl,
-                            "payload": raw,
-                            "status_code": res.status_code,
-                            "snippet": res.text[:200]
-                        })
-
                     if res.status_code in (301, 302, 303,307, 308):
                         loc = res.headers.get("Location")
                         if loc:
@@ -431,15 +422,15 @@ class XSSFuzzer:
                             "status_code": res.status_code,
                             "snippet": body[:200]
                         })
-
-                        break
+                        # Add break if you just want to see its vulnerable, without lists all successful payloads
+                        #break
 
         return results
 
 
     def domXSS(self):
         """
-            Submits payload then loads and checks JS for payload
+            Submits payload via query then loads and checks JS for payload
         """
         pass
 
