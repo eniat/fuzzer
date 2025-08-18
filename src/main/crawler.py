@@ -418,6 +418,8 @@ class Crawler:
 
                 if freeFields:
                     parsedCurrentUrl = urlparse(driver.current_url)
+                    if parsedCurrentUrl.netloc and parsedCurrentUrl.netloc != domain:
+                        continue
                     formPath = f"{parsedCurrentUrl.scheme}://{parsedCurrentUrl.netloc}{parsedCurrentUrl.path or '/'}"
 
                     if parsedCurrentUrl.fragment:
@@ -453,6 +455,10 @@ class Crawler:
                     base = driver.current_url
                     formUrl = urljoin(base, action or base)
                     parsedForm = urlparse(formUrl)
+
+                    if parsedForm.netloc and parsedForm.netloc != domain:
+                        continue
+
                     formPath = f"{parsedForm.scheme}://{parsedForm.netloc}{parsedForm.path or '/'}"
                     if parsedForm.fragment:
                         formPath += "#" + parsedForm.fragment

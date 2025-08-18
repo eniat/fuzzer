@@ -5,12 +5,15 @@ from uuid import uuid4
 from html import escape
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Regex templates for XSS injections
 SCRIPT_RE = r"<script[^>]*>.*?<!--\s*({token})\s*-->.*?</script>"
 ATTR_RE   = r"\bon\w+\s*=\s*(['\"]).*?({token}).*?\1"
 JSURL_RE  = r"(?:href|src)\s*=\s*(['\"])\s*javascript:.*?({token}).*?\1"
 
+# Cache for regex objects to avoid recompiling
 _regex_cache = {}
 
+# To exclude SQL errors when looking for XSS
 SQL = [
     "you have an error in your sql syntax",
     "mysql_fetch", "mysqli_", "pg_query", "syntax error at or near",
@@ -38,6 +41,7 @@ def detectXSS(body, token, markedPayload):
     if escape(markedPayload, quote=True).lower() in lowerBody:
         return False
 
+    # cache regex for this token
     if token not in _regex_cache:
 
         if len(_regex_cache) >= 32:
@@ -51,12 +55,15 @@ def detectXSS(body, token, markedPayload):
 
     script_re, attr_re, jsurl_re = _regex_cache[token]
 
+    # Check if xss is in dangerous contexts
     if script_re.search(body) or attr_re.search(body) or jsurl_re.search(body):
         return True
 
+    # Filter SQL errors
     if any(err in lowerBody for err in SQL):
         return False
 
+    # Check token in tags
     if any(tag in lowerBody for tag in
            ("<img", "<iframe", "<svg", "<a ", "<input", "<video", "<audio")) and f"<!--{token}-->" in lowerBody:
         return True
@@ -72,10 +79,11 @@ def isFuzzableField(field):
 
     lowered = field.lower()
 
+    # List of skips to avoid useless form fuzzing
     skips = [
         "user_token", "security", "login", "upload", "change", "submit",
         "max_file_size", "step", "create_db", "password",
-        "btnclear", "btnsign", "default"
+        "btnclear", "btnsign", "default",'rememberme',"captcha"
     ]
 
     return not any(skip in lowered for skip in skips)
@@ -141,7 +149,7 @@ class XSSFuzzer:
                 if tokenMatch:
                     self.userToken = tokenMatch.group(1)
 
-
+            # XSS detection
             if detectXSS(response.text, self.token, markedPayload):
                 result = {
                     "url": url,
@@ -168,10 +176,12 @@ class XSSFuzzer:
         """
         parsed = urlparse(self.baseUrl)
 
+        # Only fuzz if fuzz in query
         if "FUZZ" not in parsed.query:
             print("[-] No 'FUZZ' keyword found")
             return []
 
+        # Reconstruct base URL without query
         baseNoQuery = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
         originalQuery = parsed.query
 
@@ -180,14 +190,14 @@ class XSSFuzzer:
 
         with ThreadPoolExecutor(max_workers=20) as executor:
             for payload in self.payloads:
-                # Replace FUZZ with the payload
+                # Replace FUZZ with the payload, uniqely mark it, encode it for URL injection
                 markedPayload = canary(payload, self.token)
                 encoded = quote(markedPayload, safe="")
                 fuzzedQuery = originalQuery.replace("FUZZ", encoded)
                 fullUrl = f"{baseNoQuery}?{fuzzedQuery}"
 
                 tasks.append(executor.submit(self.sendRequest, fullUrl,payload=payload, markedPayload=markedPayload))
-
+            # Collect results as requests complete
             for future in as_completed(tasks):
                 result = future.result()
                 if result and "data" in result:
@@ -203,15 +213,18 @@ class XSSFuzzer:
         with ThreadPoolExecutor(max_workers=20) as executor:
             for form in forms:
                 tasks = []
+                # To track future information for saving
                 ctx = {}
 
                 url = form.get("url")
                 method = (form.get("method") or "POST").upper()
                 fields = form.get("formFields") or[]
 
+                # Skip invalid form objects
                 if not url or not fields:
                     continue
 
+                # Normalize Url
                 parsed = urlparse(self.baseUrl)
                 if not url.startswith("http"):
                     url = f"{parsed.scheme}://{parsed.netloc}{url}"
@@ -220,9 +233,11 @@ class XSSFuzzer:
                     marked = canary(raw, self.token)
 
                     if method == "POST":
+                        # POST form fuzzing
                         data = {}
 
                         for field in fields:
+                            # Inject payload into fuzzable fields
                             if isFuzzableField(field):
                                 data[field] = marked
 
@@ -238,6 +253,7 @@ class XSSFuzzer:
                         ctx[fut] = (url, raw, marked)
 
                     else:
+                        # GET form fuzzing
                         params = []
                         for field in fields:
                             if isFuzzableField(field):
@@ -246,6 +262,7 @@ class XSSFuzzer:
                             else:
                                 params.append(f"{field}=test")
 
+                        # Construct GET request
                         separator = "&" if "?" in url else "?"
                         fullUrl = f"{url}{separator}{'&'.join(params)}"
 
@@ -254,6 +271,7 @@ class XSSFuzzer:
                         tasks.append(fut)
                         ctx[fut] = (fullUrl, raw,marked)
 
+                # collect responses as they finish
                 for fut in as_completed(tasks):
                     try:
                         res = fut.result()
@@ -269,7 +287,7 @@ class XSSFuzzer:
                         if tokenMatch:
                             self.userToken = tokenMatch.group(1)
 
-
+                    # Check for XSS
                     if detectXSS(res.text, self.token, marked):
                         results.append({
                             "url": finUrl,
@@ -300,16 +318,19 @@ class XSSFuzzer:
                 if not url or not fields:
                     continue
 
+                # Normalize Url
                 parsed = urlparse(self.baseUrl)
                 if not url.startswith("http"):
                     url = f"{parsed.scheme}://{parsed.netloc}{url}"
 
+                # Track the form to potentially revisit
                 pages.add(url)
 
                 for raw in self.payloads:
                     marked = canary(raw,self.token)
 
                     if method == "POST":
+                        # POST form fuzzing
                         data = {}
 
                         for field in fields:
@@ -328,6 +349,7 @@ class XSSFuzzer:
                         ctx[fut] = (url,raw,marked)
 
                     else:
+                        # GET form fuzzing
                         params = []
 
                         for field in fields:
@@ -345,6 +367,7 @@ class XSSFuzzer:
                         tasks.append(fut)
                         ctx[fut] = (fullUrl, raw, marked)
 
+                # Collect results
                 for fut in as_completed(tasks):
                     try:
                         res = fut.result()
@@ -360,11 +383,13 @@ class XSSFuzzer:
                         if tokenMatch:
                             self.userToken = tokenMatch.group(1)
 
+                    # Follow redirections after submitting form
                     if res.status_code in (301, 302, 303,307, 308):
                         loc = res.headers.get("Location")
                         if loc:
                             pages.add(loc if loc.startswith("http")else urljoin(finUrl, loc))
 
+        # Merge extra endpoints
         if endpoints:
             parsed = urlparse(self.baseUrl)
             base = f"{parsed.scheme}://{parsed.netloc}"
@@ -375,8 +400,10 @@ class XSSFuzzer:
 
                 pages.add(end if end.startswith("http") else f"{base}{end}")
 
+        # Prebuild marked payloads
         markedPayloads = [(raw, canary(raw, self.token)) for raw in self.payloads]
 
+        # Revisit collected pages
         with ThreadPoolExecutor(max_workers=20) as executor:
 
             futToPage = {
@@ -411,9 +438,11 @@ class XSSFuzzer:
                 body = res.text
                 lowerBody = body.lower()
 
+                # If no token at all continue
                 if self.token.lower() not in lowerBody:
                     continue
 
+                # Check if payloads still persists
                 for raw, marked in markedPayloads:
                     if detectXSS(body, self.token, marked):
                         results.append({
