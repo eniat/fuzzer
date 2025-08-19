@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs, urldefrag
 import re
 
+from auth import seleniumLogin
 
 def extractIdentifier(el):
     """
@@ -56,45 +57,6 @@ def extractIdentifier(el):
     return raw.strip()
 
 
-def seleniumLogin(driver, baseUrl):
-    """
-        Log in to DVWA using Selenium
-    """
-
-    loginUrl = urljoin(baseUrl, "/login.php")
-    driver.get(loginUrl)
-
-    try:
-        # Wait until login form loads
-        WebDriverWait(driver, 1).until(expected_conditions.presence_of_element_located((By.NAME, "username")))
-
-        driver.find_element(By.NAME, "username").send_keys("admin")
-        driver.find_element(By.NAME, "password").send_keys("password")
-
-        # Submit form
-        driver.find_element(By.NAME, "Login").click()
-
-        WebDriverWait(driver, 2).until(expected_conditions.url_contains("index.php"))
-
-        # Go to security page and set to low
-        driver.get(urljoin(baseUrl, "/security.php"))
-        WebDriverWait(driver, 5).until(expected_conditions.presence_of_element_located((By.NAME, "security")))
-
-        dropdown = driver.find_element(By.NAME, "security")
-        for option in dropdown.find_elements(By.TAG_NAME, "option"):
-            if option.get_attribute("value") == "low":
-                option.click()
-
-        driver.find_element(By.NAME, "seclev_submit").click()
-        # print("[+] Logged in to DVWA via Selenium and set security to low")
-
-        return True
-
-    except Exception as e:
-        print(f"[!] Selenium login failed: {e}")
-        return False
-
-
 class Crawler:
 
     def __init__(self, mode='both', maxPages= 20, rateLimit=0.0, headless= True, outputToFile=False, isDVWA= False):
@@ -115,8 +77,8 @@ class Crawler:
 
     def crawl (self, startUrl):
         """
-        Crawl from starting url using the set mode, either static or dynamic
-        return self.discoveredEndpoints, self.discoveredForms
+            Crawl from starting url using the set mode, either static or dynamic
+            return self.discoveredEndpoints, self.discoveredForms
         """
 
         if self.isDVWA:
@@ -187,8 +149,8 @@ class Crawler:
 
     def crawlStatic(self, startUrl, domain):
         """
-        Static crawl fetches pages with requests and parses HTML with BeautifulSoup
-        return endpointDicts, staticForms
+            Static crawl fetches pages with requests and parses HTML with BeautifulSoup
+            return endpointDicts, staticForms
         """
 
         queue = [startUrl]

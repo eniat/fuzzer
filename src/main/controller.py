@@ -38,7 +38,7 @@ def main():
     parser.add_argument("--xss-params", action="store_true", help="Enable XSS parameter fuzzing. (requires FUZZ in url)")
     parser.add_argument("--xss-forms", action="store_true", help="Enable XSS form fuzzing. (requires crawler to be used)")
     parser.add_argument("--xss-stored", action="store_true",help="Enable stored XSS fuzzing. (requires crawler to be used)")
-    parser.add_argument("--xss-dom", action="store_true",help="Enable dom XSS fuzzing")
+    parser.add_argument("--xss-dom", action="store_true",help="Enable dom XSS fuzzing. (requires crawler and doesn't use wordlist")
     parser.add_argument("--wordlist", type=str, help="Path to payload wordlist for fuzzing")
     parser.add_argument("--output-to-file", action="store_true", help="Save output to a file")
     parser.add_argument("--llm", type =str, help="Natural language prompt to filter the wordlist using local ML")
@@ -120,8 +120,8 @@ def main():
 
     else:
 
-        if not args.wordlist:
-            print("The Fuzzer requires a --wordlist to run")
+        if (not args.wordlist) and (args.fuzz_paths or args.fuzz_params or args.xss_params or args.xss_forms or args.xss_stored):
+            print("The Fuzzer requires a --wordlist to run for the selected mode")
             return
 
         if args.use_crawler:
@@ -144,6 +144,8 @@ def main():
             )
             endpoints, forms = crawler.crawl(args.start_url)
 
+            rawDomForms = forms[:]
+
             forms = [
                 f for f in forms
                 if any(isFuzzableField(field) for field in f.get("formFields", []))
@@ -152,7 +154,7 @@ def main():
             if not endpoints:
 
                 print("[-] No endpoints found by crawler.")
-                if not (args.xss_forms or args.xss_stored):
+                if not (args.xss_forms or args.xss_stored or args.xss_dom):
                     return
 
             # Derive base url for relative links
@@ -249,7 +251,8 @@ def main():
                         wordlistPath=args.wordlist,
                         outputToFile=args.output_to_file,
                         isDVWA=args.dvwa,
-                        isSilent =True
+                        isSilent =True,
+                        headless=not args.no_headless
                     )
 
                     res = fuzzer.paramXSS()
@@ -279,7 +282,8 @@ def main():
                         wordlistPath=args.wordlist,
                         outputToFile=args.output_to_file,
                         isDVWA=args.dvwa,
-                        isSilent=True
+                        isSilent=True,
+                        headless=not args.no_headless
                     )
 
                     res = fuzzer.formXSS([form])
@@ -299,7 +303,8 @@ def main():
                         wordlistPath=args.wordlist,
                         outputToFile=args.output_to_file,
                         isDVWA=args.dvwa,
-                        isSilent=True
+                        isSilent=True,
+                        headless=not args.no_headless
                     )
 
                     # Pass directories of forms/ shared directory endpoints
@@ -321,7 +326,7 @@ def main():
                 return results
 
             if args.fuzz_paths or args.fuzz_params or args.xss_params:
-                print(f"\n[+] Starting threaded fuzzing on {len(endpoints)} endpoints... \n")
+                print(f"\n[+] Starting threaded fuzzing on discovered endpoints... \n")
                 with ThreadPoolExecutor(max_workers=20) as executor:
                     # Run fuzzer using threads across all endpoints
                     futures = [executor.submit(fuzzEndpoint, ep) for ep in UniqueEndpoints]
@@ -331,7 +336,7 @@ def main():
                         allVulnerabilities.extend(results)
 
             if args.xss_forms or args.xss_stored:
-                print(f"\n[+] Starting threaded fuzzing on {len(forms)} Forms... \n")
+                print(f"\n[+] Starting threaded fuzzing on discovered Forms... \n")
                 with ThreadPoolExecutor(max_workers=20) as executor:
                     # Run fuzzer using threads across all forms
                     futures = [executor.submit(fuzzForm, form) for form in forms]
@@ -341,6 +346,26 @@ def main():
                         if res:
                             allVulnerabilities.extend(res)
 
+            if args.xss_dom:
+                print(f"\n[+] Running Dom XSS on discovered forms/endpoints...\n")
+
+                fuzzer = XSSFuzzer(
+                    baseUrl=args.start_url,
+                    useCrawler=False,
+                    wordlistPath=args.wordlist,
+                    outputToFile=args.output_to_file,
+                    isDVWA=args.dvwa,
+                    isSilent=True,
+                    headless=not args.no_headless
+                )
+
+                res = fuzzer.domXSS(forms=rawDomForms, endpoints=endpoints)
+
+                if res:
+                    for vul in res:
+                        vul["type"] = "xss_dom"
+
+                    allVulnerabilities.extend(res)
 
             if allVulnerabilities:
                 # Out put results if any returned
@@ -383,7 +408,8 @@ def main():
                     wordlistPath=args.wordlist,
                     outputToFile=args.output_to_file,
                     isDVWA=args.dvwa,
-                    isSilent=True
+                    isSilent=True,
+                    headless=not args.no_headless
                 )
 
                 results = fuzzer.paramXSS()
