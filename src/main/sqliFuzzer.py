@@ -1,19 +1,53 @@
 import re
 import requests
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from difflib import SequenceMatcher
 
+from xssFuzzer import isFuzzableField, detectXSS
 
 SQL = [
     "you have an error in your sql syntax",
     "mysql_fetch", "mysqli_", "pg_query", "syntax error at or near",
-    "unclosed quotation mark after the character string", "ora-"
+    "unclosed quotation mark after the character string", "ora-",
+    "unknown column", "no such column", "unrecognized token",
+    "near \"select\"", "warning: mysql", "odbc sql server driver",
+    "sqlstate", "quoted string not properly terminated"
 ]
 
-def detectSQLi(body):
+def detectSQLError(body):
     """
-        If payload works then it flags true
+        Detects SQL errors which highlights potential vulnerabilities
     """
-    pass
+    lower = (body or "").lower()
+
+    for err in SQL:
+        if err in lower:
+            return True, err
+
+    return False, None
+
+def detectSQLi(baseText, baseStatus, resBody ,resStatus, simThreshold= 0.90, deltaThreshold= 50):
+    """
+        If payload works then it flags true and returns indicator
+    """
+
+    try:
+        if baseStatus != resStatus:
+            return True, f"status_change({baseStatus}->{resStatus})"
+
+        sim = SequenceMatcher(None, baseText or "", resBody or "").quick_ratio()
+
+        if sim < simThreshold:
+            return True, f"diff(sim={sim:.2f})"
+
+        if abs(len(resBody or "") - len(baseText or "")) > deltaThreshold:
+            return True, f"size_delta(>{deltaThreshold})"
+
+    except Exception:
+        pass
+
+    return False, None
 
 class SQLiFuzzer:
 
@@ -57,51 +91,168 @@ class SQLiFuzzer:
             # On error raise exception
             raise RuntimeError(f"[-] Failed to load wordlist from {self.wordlistPath}: {e}")
 
-    def sendRequest(self, url, payload=None, markedPayload= None):
+    def getBaseline(self, endpoint, method, fields):
         """
-            Send a single GET request and check for success
+            Get baseline to compare if SQLi worked
         """
         try:
-            # Check if DVWA and add token
-            if self.isDVWA and self.userToken:
-                separator = '&' if '?' in url else '?'
-                url = f"{url}{separator}user_token={self.userToken}"
+            if method == "POST":
+                baseData = {f: "test" for f in fields}
 
-            response = self.session.get(url, headers=self.headers, timeout=3, allow_redirects=False)
+                if self.isDVWA and self.userToken:
+                    baseData.setdefault("user_token", self.userToken)
 
-            # Refresh token
+                res = self.session.post(endpoint, data= baseData,headers=self.headers, timeout= 2, allow_redirects=False)
+
+            else:
+                params = [f"{f}=test" for f in fields]
+                sep = "&" if "?" in endpoint else "?"
+                baseUrl = f"{endpoint}{sep}{'&'.join(params)}"
+
+                if self.isDVWA and self.userToken:
+                    baseUrl = f"{baseUrl}{'&' if '?' in baseUrl else '?'}user_token={self.userToken}"
+
+                res = self.session.get(baseUrl,headers=self.headers, timeout= 2, allow_redirects=False)
+
+            baseText, baseStatus = res.text or "", res.status_code
+
             if self.isDVWA:
-                tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', response.text)
-                if tokenMatch:
-                    self.userToken = tokenMatch.group(1)
+                m = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', baseText)
 
-            # SQLi detection
-            if detectSQLi(response.text):
-                result = {
-                    "url": url,
-                    "payload": payload,
-                    "status_code": response.status_code,
-                    "snippet": (response.text or "")[:200]
-                }
+                if m:
+                    self.userToken = m.group(1)
 
-                self.vulnerableForms.append(result)
-                return {"type": "vulnerable", "data": result}
+            return baseText, baseStatus
 
-        except requests.exceptions.Timeout:
-            # When fuzzing large endpoints timeouts overwhelm, disable if needed
-            pass
-
-        except requests.RequestException as e:
-            if not self.isSilent:
-                print(f"[!] Request failed for {url}: {e}")
-
-        return None
+        except Exception:
+            return "",0
 
     def SQLiFuzz(self, forms):
         """
             Takes the forms retrieved by the crawler and fuzzes them for SQLi vulnerabilities
         """
-        pass
+        results = []
+
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            for form in forms:
+                tasks = []
+                # To track future information for saving
+                ctx = {}
+
+                url = form.get("url")
+                method = (form.get("method") or "POST").upper()
+                fields = form.get("formFields") or []
+
+                # Skip invalid form objects
+                if not url or not fields:
+                    continue
+
+                # Normalize Urls
+                parsed = urlparse(self.baseUrl)
+
+                if not url.startswith("http"):
+                    url = f"{parsed.scheme}://{parsed.netloc}{url}"
+
+                # Get a baseline for later comparisons
+                baseText, baseStatus = self.getBaseline(url, method, fields)
+
+                for raw in self.payloads:
+                    if method == "POST":
+                        # POST form fuzzing
+                        data = {}
+
+                        for field in fields:
+                            # Inject payload into fuzzable fields
+                            if isFuzzableField(field):
+                                data[field] = raw
+
+                            else:
+                                data[field] = "test"
+
+
+                        if self.isDVWA and self.userToken:
+                            data.setdefault("user_token", self.userToken)
+
+                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=3, allow_redirects=False)
+
+                        tasks.append(fut)
+                        ctx[fut] = (url, raw)
+
+                    else:
+                        # GET form fuzzing
+                        params = []
+                        for field in fields:
+                            if isFuzzableField(field):
+                                params.append(f"{field}={quote(raw, safe='')}")
+
+                            else:
+                                params.append(f"{field}=test")
+
+                        # Contruct GET requests
+                        separator = "&" if "?" in url else "?"
+                        fullUrl = f"{url}{separator}{'&'.join(params)}"
+
+                        if self.isDVWA and self.userToken:
+                            fullUrl = f"{fullUrl}{'&' if '?' in fullUrl else '?'}user_token={self.userToken}"
+
+                        fut = executor.submit( self.session.get, fullUrl, headers=self.headers, timeout=3,allow_redirects=False)
+
+                        tasks.append(fut)
+                        ctx[fut] = (fullUrl, raw)
+
+                # collect responses as they finish
+                for fut in as_completed(tasks):
+                    try:
+                        res = fut.result()
+
+                    except Exception:
+                        continue
+
+                    finUrl, raw = ctx[fut]
+
+                    # DVWA token refresh
+                    if self.isDVWA:
+                        tokenMatch = re.search(
+                            r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]',
+                            res.text or ""
+                        )
+                        if tokenMatch:
+                            self.userToken = tokenMatch.group(1)
+
+                    body = res.text or ""
+                    status = res.status_code
+
+                    # Check for SQL Error
+                    isErr, indicator = detectSQLError(body)
+                    if isErr:
+                        hit = {
+                            "url": finUrl,
+                            "payload":raw,
+                            "status_code": status,
+                            "indicator": indicator,
+                            "response_snippet": body[:200],
+                            "type": "potential"
+                        }
+
+                        self.vulnerableForms.append(hit)
+                        results.append(hit)
+                        continue
+
+                    # Check for valid SQLi ran code
+                    if baseText or baseStatus is not None:
+                        isPos, posInd = detectSQLi(baseText, baseStatus, body, status)
+                        if isPos:
+                            hit = {
+                                "url": finUrl,
+                                "payload": raw,
+                                "status_code": status,
+                                "indicator": posInd,
+                                "response_snippet": body[:200],
+                                "type": "vulnerable"
+                            }
+                            self.vulnerableForms.append(hit)
+                            results.append(hit)
+        return results
 
     def login(self):
         """

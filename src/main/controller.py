@@ -8,6 +8,7 @@ from crawler import Crawler
 from pathFuzzer import PathFuzzer
 from llm import filterML
 from xssFuzzer import XSSFuzzer, isFuzzableField
+from sqliFuzzer import SQLiFuzzer
 
 def getdirectories(path):
     """
@@ -39,6 +40,7 @@ def main():
     parser.add_argument("--xss-forms", action="store_true", help="Enable XSS form fuzzing. (requires crawler to be used)")
     parser.add_argument("--xss-stored", action="store_true",help="Enable stored XSS fuzzing. (requires crawler to be used)")
     parser.add_argument("--xss-dom", action="store_true",help="Enable dom XSS fuzzing. (requires crawler and doesn't use wordlist")
+    parser.add_argument("--fuzz-sqli", action="store_true",help="Enable SQL injection fuzzing. (requires crawler to be used)")
     parser.add_argument("--wordlist", type=str, help="Path to payload wordlist for fuzzing")
     parser.add_argument("--output-to-file", action="store_true", help="Save output to a file")
     parser.add_argument("--llm", type =str, help="Natural language prompt to filter the wordlist using local ML")
@@ -82,7 +84,8 @@ def main():
             and not args.xss_params
             and not args.xss_forms
             and not args.xss_stored
-            and not args.xss_dom):
+            and not args.xss_dom
+            and not args.fuzz_sqli):
 
         crawler = Crawler(
             mode=args.crawler_mode,
@@ -120,7 +123,7 @@ def main():
 
     else:
 
-        if (not args.wordlist) and (args.fuzz_paths or args.fuzz_params or args.xss_params or args.xss_forms or args.xss_stored):
+        if (not args.wordlist) and (args.fuzz_paths or args.fuzz_params or args.xss_params or args.xss_forms or args.xss_stored or args.fuzz_sqli):
             print("The Fuzzer requires a --wordlist to run for the selected mode")
             return
 
@@ -132,7 +135,7 @@ def main():
 
             allVulnerabilities = []
 
-            print("\n[+] Using crawler to discover endpoints...")
+            print("\n[+] Using crawler to discover endpoints and forms...")
 
             crawler = Crawler(
                 mode= args.crawler_mode,
@@ -151,10 +154,10 @@ def main():
                 if any(isFuzzableField(field) for field in f.get("formFields", []))
             ]
 
-            if not endpoints:
+            if not endpoints and not forms:
 
-                print("[-] No endpoints found by crawler.")
-                if not (args.xss_forms or args.xss_stored or args.xss_dom):
+                print("[-] No endpoints or forms found by crawler.")
+                if not (args.xss_forms or args.xss_stored or args.xss_dom or args.fuzz_sqli):
                     return
 
             # Derive base url for relative links
@@ -323,9 +326,32 @@ def main():
 
                         results.extend(res)
 
+                if args.fuzz_sqli:
+
+                    print(f"[Thread] SQLi Form Fuzzing: {fullUrl}")
+                    fuzzer = SQLiFuzzer(
+                        baseUrl=args.start_url,
+                        useCrawler= False,
+                        wordlistPath=args.wordlist,
+                        outputToFile=args.output_to_file,
+                        isDVWA=args.dvwa,
+                        isSilent=True
+                    )
+
+                    res = fuzzer.SQLiFuzz([form])
+
+                    if res:
+                        for vuln in res:
+                            if vuln.get("type") == "vulnerable":
+                                vuln["type"] = "sqli"
+                            elif vuln.get("type") == "potential":
+                                vuln["type"] = "sqli_potential"
+
+                        results.extend(res)
+
                 return results
 
-            if args.fuzz_paths or args.fuzz_params or args.xss_params:
+            if args.fuzz_paths or args.fuzz_params or args.xss_params or args.fuzz_sqli:
                 print(f"\n[+] Starting threaded fuzzing on discovered endpoints... \n")
                 with ThreadPoolExecutor(max_workers=20) as executor:
                     # Run fuzzer using threads across all endpoints
@@ -335,7 +361,7 @@ def main():
                         results = future.result()
                         allVulnerabilities.extend(results)
 
-            if args.xss_forms or args.xss_stored:
+            if args.xss_forms or args.xss_stored or args.fuzz_sqli:
                 print(f"\n[+] Starting threaded fuzzing on discovered Forms... \n")
                 with ThreadPoolExecutor(max_workers=20) as executor:
                     # Run fuzzer using threads across all forms
