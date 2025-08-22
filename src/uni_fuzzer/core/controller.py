@@ -4,18 +4,24 @@ from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath
 
-from crawler import Crawler
-from pathFuzzer import PathFuzzer
-from llm import filterML
-from xssFuzzer import XSSFuzzer, isFuzzableField
-from sqliFuzzer import SQLiFuzzer
+from uni_fuzzer.crawler.crawler import Crawler
+from uni_fuzzer.fuzzers.path import PathFuzzer
+from uni_fuzzer.llm.semantic_llm import filterML
+from uni_fuzzer.fuzzers.xss import XSSFuzzer
+from uni_fuzzer.fuzzers.sqli import SQLiFuzzer
+
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField
+cfg = get_cfg()
 
 def getdirectories(path):
     """
         Helper for stripping filenames and only leaving directories
     """
 
-    exts = ('.php', '.html', '.asp', '.aspx', '.jsp', '.py', '.rb', '.zip')
+    exts = tuple(cfg.get("paths", {}).get("file_extensions", [
+        ".php", ".html", ".asp", ".aspx", ".jsp", ".py", ".rb", ".zip"
+    ]))
+
     segments = path.rstrip("/").split("/")
 
     if segments and any(segments[-1].lower().endswith(ext) for ext in exts):
@@ -23,6 +29,29 @@ def getdirectories(path):
 
     baseDir = "/" + "/".join(segments) if segments else "/"
     return str(PurePosixPath(baseDir))
+
+def getParents(path):
+    """
+        Gets the parents of the given URL
+    """
+    p = PurePosixPath(urlparse(path).path or "/")
+
+    chain = []
+    for parent in p.parents:
+        if str(parent) != ".":
+            chain.append(str(parent) if str(parent).startswith("/") else f"/{parent}")
+
+    chain.append(str(p) if str(p).startswith("/") else f"/{p}")
+
+    # normalize and dedupe
+    seen, out = set(), []
+
+    for x in chain:
+        n = str(PurePosixPath(x)).rstrip("/") or "/"
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
 
 def main():
 
@@ -44,9 +73,11 @@ def main():
     parser.add_argument("--wordlist", type=str, help="Path to payload wordlist for fuzzing")
     parser.add_argument("--output-to-file", action="store_true", help="Save output to a file")
     parser.add_argument("--llm", type =str, help="Natural language prompt to filter the wordlist using local ML")
+    parser.add_argument("--auth", action="store_true", help="Use if webapp is behind a login page")
+    parser.add_argument("--username", type=str, help="Username for Selenium login")
+    parser.add_argument("--password", type=str, help="Password for Selenium login")
+    parser.add_argument("--login-path", type=str, help="Login path or absolute URL for Selenium")
 
-    # Testing specific
-    parser.add_argument("--dvwa", action="store_true", help="Enable auto-login for DVWA")
     args = parser.parse_args()
 
     # if --llm is used wordlist needs to be provided
@@ -93,12 +124,16 @@ def main():
             rateLimit=args.rate_limit,
             headless= not args.no_headless,
             outputToFile=args.output_to_file,
-            isDVWA = args.dvwa
+            auth= args.auth,
+            loginUsername = args.username,
+            loginPassword = args.password,
+            loginPath = args.login_path
         )
 
         print("\n[+] Starting Crawler...")
 
         endpoints, forms = crawler.crawl(args.start_url)
+        sharedSession = getattr(crawler, "session", None)
 
         # Check that at least one endpoint is discovered
         if endpoints:
@@ -143,9 +178,13 @@ def main():
                 rateLimit= args.rate_limit,
                 headless=not args.no_headless,
                 outputToFile= args.output_to_file,
-                isDVWA= args.dvwa
+                auth=args.auth,
+                loginUsername=args.username,
+                loginPassword=args.password,
+                loginPath=args.login_path
             )
             endpoints, forms = crawler.crawl(args.start_url)
+            sharedSession = getattr(crawler, "session", None)
 
             rawDomForms = forms[:]
 
@@ -204,18 +243,20 @@ def main():
 
                     fuzzer = PathFuzzer(
                         baseUrl= fullUrl,
-                        useCrawler= False,
                         wordlistPath =args.wordlist,
                         outputToFile= args.output_to_file,
-                        isDVWA= args.dvwa,
-                        isSilent = True
+                        isSilent = True,
+                        session=sharedSession,
+                        auth=args.auth,
                     )
                     fuzzer.visitedPaths = globalVisitedPaths
                     fuzzer.visitedFuzzPaths = globalVisitedFuzzPaths
 
-                    res = fuzzer.run(fuzzParams=False, fuzzPaths=True)
-                    if res:
-                        results.extend(res)
+                    for path in getParents(fullUrl):
+                        fuzzer.fuzzPath(path)
+
+                    if fuzzer.vulnerablePaths:
+                        results.extend(fuzzer.vulnerablePaths)
 
                 if args.fuzz_params and params:
 
@@ -227,16 +268,16 @@ def main():
 
                     fuzzer = PathFuzzer(
                         baseUrl= fuzzedUrl,
-                        useCrawler= False,
                         wordlistPath= args.wordlist,
                         outputToFile= args.output_to_file,
-                        isDVWA= args.dvwa,
-                        isSilent= True
+                        isSilent= True,
+                        session=sharedSession,
+                        auth=args.auth,
                     )
                     fuzzer.visitedPaths = globalVisitedPaths
                     fuzzer.visitedFuzzPaths = globalVisitedFuzzPaths
 
-                    res = fuzzer.run(fuzzParams=True, fuzzPaths=False)
+                    res = fuzzer.fuzzParams()
                     if res:
                         results.extend(res)
 
@@ -253,9 +294,13 @@ def main():
                         useCrawler=False,
                         wordlistPath=args.wordlist,
                         outputToFile=args.output_to_file,
-                        isDVWA=args.dvwa,
                         isSilent =True,
-                        headless=not args.no_headless
+                        headless=not args.no_headless,
+                        session=sharedSession,
+                        auth=args.auth,
+                        loginUsername=args.username,
+                        loginPassword=args.password,
+                        loginPath=args.login_path
                     )
 
                     res = fuzzer.paramXSS()
@@ -284,9 +329,13 @@ def main():
                         useCrawler=False,
                         wordlistPath=args.wordlist,
                         outputToFile=args.output_to_file,
-                        isDVWA=args.dvwa,
                         isSilent=True,
-                        headless=not args.no_headless
+                        headless=not args.no_headless,
+                        session=sharedSession,
+                        auth=args.auth,
+                        loginUsername=args.username,
+                        loginPassword=args.password,
+                        loginPath=args.login_path
                     )
 
                     res = fuzzer.formXSS([form])
@@ -305,9 +354,13 @@ def main():
                         useCrawler= False,
                         wordlistPath=args.wordlist,
                         outputToFile=args.output_to_file,
-                        isDVWA=args.dvwa,
                         isSilent=True,
-                        headless=not args.no_headless
+                        headless=not args.no_headless,
+                        session=sharedSession,
+                        auth=args.auth,
+                        loginUsername=args.username,
+                        loginPassword=args.password,
+                        loginPath=args.login_path
                     )
 
                     # Pass directories of forms/ shared directory endpoints
@@ -334,8 +387,12 @@ def main():
                         useCrawler= False,
                         wordlistPath=args.wordlist,
                         outputToFile=args.output_to_file,
-                        isDVWA=args.dvwa,
-                        isSilent=True
+                        isSilent=True,
+                        session=sharedSession,
+                        auth=args.auth,
+                        loginUsername=args.username,
+                        loginPassword=args.password,
+                        loginPath=args.login_path
                     )
 
                     res = fuzzer.SQLiFuzz([form])
@@ -353,7 +410,7 @@ def main():
 
             if args.fuzz_paths or args.fuzz_params or args.xss_params or args.fuzz_sqli:
                 print(f"\n[+] Starting threaded fuzzing on discovered endpoints... \n")
-                with ThreadPoolExecutor(max_workers=20) as executor:
+                with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
                     # Run fuzzer using threads across all endpoints
                     futures = [executor.submit(fuzzEndpoint, ep) for ep in UniqueEndpoints]
 
@@ -363,7 +420,7 @@ def main():
 
             if args.xss_forms or args.xss_stored or args.fuzz_sqli:
                 print(f"\n[+] Starting threaded fuzzing on discovered Forms... \n")
-                with ThreadPoolExecutor(max_workers=20) as executor:
+                with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
                     # Run fuzzer using threads across all forms
                     futures = [executor.submit(fuzzForm, form) for form in forms]
 
@@ -380,9 +437,13 @@ def main():
                     useCrawler=False,
                     wordlistPath=args.wordlist,
                     outputToFile=args.output_to_file,
-                    isDVWA=args.dvwa,
                     isSilent=True,
-                    headless=not args.no_headless
+                    headless=not args.no_headless,
+                    session=sharedSession,
+                    auth=args.auth,
+                    loginUsername=args.username,
+                    loginPassword=args.password,
+                    loginPath=args.login_path
                 )
 
                 res = fuzzer.domXSS(forms=rawDomForms, endpoints=endpoints)
@@ -433,9 +494,13 @@ def main():
                     useCrawler=False,
                     wordlistPath=args.wordlist,
                     outputToFile=args.output_to_file,
-                    isDVWA=args.dvwa,
                     isSilent=True,
-                    headless=not args.no_headless
+                    headless=not args.no_headless,
+                    session=None,
+                    auth=args.auth,
+                    loginUsername=args.username,
+                    loginPassword=args.password,
+                    loginPath=args.login_path
                 )
 
                 results = fuzzer.paramXSS()
@@ -456,14 +521,26 @@ def main():
 
                 fuzzer = PathFuzzer(
                     baseUrl=args.start_url,
-                    useCrawler=False,
                     wordlistPath=args.wordlist,
                     outputToFile=args.output_to_file,
-                    isDVWA=args.dvwa,
-                    isSilent = True
+                    isSilent=True,
+                    session=None,
+                    loginUsername=args.username,
+                    loginPassword=args.password,
+                    loginPath=args.login_path,
+                    auth=args.auth,
                 )
 
-                results = fuzzer.run(fuzzParams=args.fuzz_params, fuzzPaths=args.fuzz_paths)
+                if args.fuzz_paths:
+                    for p in getParents(args.start_url):
+                        fuzzer.fuzzPath(p)
+
+                results = []
+
+                if args.fuzz_params:
+                    results.extend(fuzzer.fuzzParams())
+
+                results.extend(fuzzer.vulnerablePaths)
 
                 if results:
                     print("\n[+] Vulnerabilities discovered:")
@@ -479,7 +556,7 @@ def main():
                         print()
 
                     if args.output_to_file:
-                        with open("pathFuzzerOutput.txt", "w", encoding = "utf-8", errors= "replace") as f:
+                        with open("pathFuzzerOutput.txt", "w", encoding="utf-8", errors="replace") as f:
                             for vuln in results:
                                 if vuln["type"] == "interesting_200":
                                     f.write(f"  - [INTERESTING 200] {vuln['url']}\n")
@@ -488,7 +565,8 @@ def main():
                                 f.write(f"  Payload:       {vuln['payload']}\n")
                                 f.write(f"  Status Code:   {vuln.get('status_code', 'N/A')}\n")
                                 f.write(f"  Indicator Hit: {vuln.get('indicator', 'N/A')}\n")
-                                f.write(f"  Snippet:       {vuln.get('response_snippet', '').replace(chr(10), ' ')[:200]}\n")
+                                f.write(
+                                    f"  Snippet:       {vuln.get('response_snippet', '').replace(chr(10), ' ')[:200]}\n")
                                 f.write("-" * 50 + "\n")
 
                 else:

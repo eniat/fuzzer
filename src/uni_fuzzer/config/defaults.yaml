@@ -1,0 +1,138 @@
+http:
+  user_agent: "uni-fuzzer/0.1 (+https://example.local)"
+  add_referer: true
+  timeout_get_seconds: 2
+  timeout_post_seconds: 2
+  redirects:
+    baseline_get: true
+    baseline_post: true
+    fuzz_get: false
+    fuzz_post: false
+    stored_xss: True
+    submit: False
+
+concurrency:
+  max_workers: 20
+  path_workers_recursive: 10
+
+crawler:
+  mode_default: "both"
+  max_pages_default: 20
+  rate_limit_default: 0.0
+  headless_default: true
+  output_to_file_default: false
+
+fuzz:
+  max_depth_default: 3
+  similarity_skip_threshold: 0.90
+  baseline_404_path: "/thisshouldnotexist143903458903527903452"
+  excluded_extensions: [".php", ".js", ".css", ".png", ".jpg", ".json"]
+  skipped_fields:
+    - user_token
+    - security
+    - login
+    - upload
+    - change
+    - submit
+    - max_file_size
+    - step
+    - create_db
+    - password
+    - btnclear
+    - btnsign
+    - rememberme
+    - captcha
+    - default
+
+path_traversal:
+  indicators:
+    - "root:x:0:0"
+    - "daemon:x"
+    - "bin:x"
+    - "/bin/bash"
+    - "[boot loader]"
+    - "[extensions]"
+    - "multi(0)disk(0)rdisk(0)"
+    - "illegal file type"
+    - "enoent"
+    - "eacces"
+    - "failed to open stream"
+    - "stack trace"
+    - " at /"
+    - "open '/etc/passwd'"
+    - "cannot open file"
+    - "permission denied"
+    - "failed opening required"
+    - "linux version"
+    - "include("
+    - "require("
+    - "c:\\windows\\system32"
+    - "\\r\\n"
+    - "<drive>"
+
+xss:
+  dom_payloads:
+    - "<img src=x onerror=alert(1)>"
+    - "\"><img src=x onerror=alert(1)>"
+    - "'\"><img src=x onerror=alert(1)>"
+    - "<video src=x onerror=alert(1)>"
+    - "<audio src=x onerror=alert(1)>"
+    - "<details open ontoggle=alert(1)>"
+    - "\"><svg/onload=alert(1)>"
+    - "<svg/onload=alert(1)>"
+    - "</script><script>alert(1)</script>"
+    - "<iframe srcdoc='<script>alert(1)</script>'></iframe>"
+    - "<body onload=alert(1)>"
+    - "<img src=1 onerror=alert`1`>"
+    - "<img src=x onerror=confirm(1)>"
+    - "<marquee onstart=alert(1)>"
+    - "javascript:alert(1)"
+  dom_delay_seconds: 0.25
+  regex:
+    script: "<script[^>]*>.*?<!--\\s*({token})\\s*-->.*?</script>"
+    attr: "\\bon\\w+\\s*=\\s*(['\\\"]).*?({token}).*?\\1"
+    jsurl: "(?:href|src)\\s*=\\s*(['\\\"])\\s*javascript:.*?({token}).*?\\1"
+
+sqli:
+  error_signatures:
+    - "you have an error in your sql syntax"
+    - "mysql_fetch"
+    - "mysqli_"
+    - "pg_query"
+    - "syntax error at or near"
+    - "unclosed quotation mark after the character string"
+    - "ora-"
+    - "unknown column"
+    - "no such column"
+    - "unrecognized token"
+    - "near \"select\""
+    - "warning: mysql"
+    - "odbc sql server driver"
+    - "sqlstate"
+    - "quoted string not properly terminated"
+  similarity_threshold: 0.90
+  size_delta_threshold: 50
+
+paths:
+  file_extensions:
+    - ".php"
+    - ".html"
+    - ".asp"
+    - ".aspx"
+    - ".jsp"
+    - ".py"
+    - ".rb"
+    - ".zip"
+
+auth:
+  login_path: "/login"
+
+  selenium_wait_seconds:
+    short: 2
+    medium: 5
+    long: 10
+
+  selectors:
+    username_field: "username"
+    password_field: "password"
+    submit_name: "Login"

@@ -4,16 +4,12 @@ from urllib.parse import urlparse, quote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 
-from xssFuzzer import isFuzzableField, detectXSS
+from uni_fuzzer.auth.auth import login
 
-SQL = [
-    "you have an error in your sql syntax",
-    "mysql_fetch", "mysqli_", "pg_query", "syntax error at or near",
-    "unclosed quotation mark after the character string", "ora-",
-    "unknown column", "no such column", "unrecognized token",
-    "near \"select\"", "warning: mysql", "odbc sql server driver",
-    "sqlstate", "quoted string not properly terminated"
-]
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField
+cfg = get_cfg()
+
+SQL = cfg["sqli"]["error_signatures"]
 
 def detectSQLError(body):
     """
@@ -27,7 +23,7 @@ def detectSQLError(body):
 
     return False, None
 
-def detectSQLi(baseText, baseStatus, resBody ,resStatus, simThreshold= 0.90, deltaThreshold= 50):
+def detectSQLi(baseText, baseStatus, resBody ,resStatus, simThreshold=cfg["sqli"]["similarity_threshold"], deltaThreshold=cfg["sqli"]["size_delta_threshold"]):
     """
         If payload works then it flags true and returns indicator
     """
@@ -51,29 +47,32 @@ def detectSQLi(baseText, baseStatus, resBody ,resStatus, simThreshold= 0.90, del
 
 class SQLiFuzzer:
 
-    def __init__(self, baseUrl, useCrawler=False, outputToFile= False, wordlistPath=None,isDVWA=False, isSilent= False):
+    def __init__(self, baseUrl, useCrawler=False, outputToFile= False, wordlistPath=None, isSilent= False, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False):
         self.baseUrl = baseUrl
         self.useCrawler = useCrawler
         self.wordlistPath = wordlistPath
         self.outputToFile = outputToFile
         self.isSilent = isSilent
 
-        # For testing
-        self.isDVWA = isDVWA
-        self.session = requests.Session()
-        self.userToken = ""
+        # Authentication
+        self.session = session or requests.Session()
+        self.loginUsername = loginUsername
+        self.loginPassword = loginPassword
+        self.loginPath = loginPath
+        self.auth = auth
 
         self.payloads = self.loadWordlist() if self.wordlistPath is not None else []
 
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
-            "Referer": self.baseUrl,
-        }
+        self.headers = {"User-Agent": cfg["http"]["user_agent"],}
+        if cfg["http"]["add_referer"]:
+            self.headers["Referer"] = self.baseUrl
 
         self.vulnerableForms = []
 
-        if self.isDVWA:
-            self.login()
+        if self.auth and self.loginUsername and self.loginPassword:
+            ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
+            if not ok:
+                print("[-] HTTP login in SQLi Fuzzer failed")
 
     def loadWordlist(self):
         """
@@ -99,28 +98,16 @@ class SQLiFuzzer:
             if method == "POST":
                 baseData = {f: "test" for f in fields}
 
-                if self.isDVWA and self.userToken:
-                    baseData.setdefault("user_token", self.userToken)
-
-                res = self.session.post(endpoint, data= baseData,headers=self.headers, timeout= 2, allow_redirects=False)
+                res = self.session.post(endpoint, data= baseData,headers=self.headers, timeout=cfg["http"]["timeout_post_seconds"], allow_redirects=cfg["http"]["redirects"]["baseline_post"])
 
             else:
                 params = [f"{f}=test" for f in fields]
                 sep = "&" if "?" in endpoint else "?"
                 baseUrl = f"{endpoint}{sep}{'&'.join(params)}"
 
-                if self.isDVWA and self.userToken:
-                    baseUrl = f"{baseUrl}{'&' if '?' in baseUrl else '?'}user_token={self.userToken}"
-
-                res = self.session.get(baseUrl,headers=self.headers, timeout= 2, allow_redirects=False)
+                res = self.session.get(baseUrl,headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["baseline_get"])
 
             baseText, baseStatus = res.text or "", res.status_code
-
-            if self.isDVWA:
-                m = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', baseText)
-
-                if m:
-                    self.userToken = m.group(1)
 
             return baseText, baseStatus
 
@@ -133,7 +120,7 @@ class SQLiFuzzer:
         """
         results = []
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             for form in forms:
                 tasks = []
                 # To track future information for saving
@@ -169,11 +156,7 @@ class SQLiFuzzer:
                             else:
                                 data[field] = "test"
 
-
-                        if self.isDVWA and self.userToken:
-                            data.setdefault("user_token", self.userToken)
-
-                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=3, allow_redirects=False)
+                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_post_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
 
                         tasks.append(fut)
                         ctx[fut] = (url, raw)
@@ -192,10 +175,7 @@ class SQLiFuzzer:
                         separator = "&" if "?" in url else "?"
                         fullUrl = f"{url}{separator}{'&'.join(params)}"
 
-                        if self.isDVWA and self.userToken:
-                            fullUrl = f"{fullUrl}{'&' if '?' in fullUrl else '?'}user_token={self.userToken}"
-
-                        fut = executor.submit( self.session.get, fullUrl, headers=self.headers, timeout=3,allow_redirects=False)
+                        fut = executor.submit( self.session.get, fullUrl, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
 
                         tasks.append(fut)
                         ctx[fut] = (fullUrl, raw)
@@ -210,14 +190,6 @@ class SQLiFuzzer:
 
                     finUrl, raw = ctx[fut]
 
-                    # DVWA token refresh
-                    if self.isDVWA:
-                        tokenMatch = re.search(
-                            r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]',
-                            res.text or ""
-                        )
-                        if tokenMatch:
-                            self.userToken = tokenMatch.group(1)
 
                     body = res.text or ""
                     status = res.status_code
@@ -253,60 +225,3 @@ class SQLiFuzzer:
                             self.vulnerableForms.append(hit)
                             results.append(hit)
         return results
-
-    def login(self):
-        """
-            Log in to DVWA using default credentials and set security to low
-        """
-
-        parsed = urlparse(self.baseUrl)
-        base = f"{parsed.scheme}://{parsed.netloc}"
-
-        loginUrl = f"{base}/login.php"
-        securityUrl = f"{base}/security.php"
-
-        try:
-            loginPage = self.session.get(loginUrl, headers=self.headers)
-            # print("[DEBUG] Login page response\n:", loginPage.text)
-
-            tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', loginPage.text)
-
-            token = tokenMatch.group(1) if tokenMatch else ''
-            # print(f"[DEBUG] CSRF token from login page:{token}")
-
-            if not token:
-                print("[!] Could not extract CSRF token from login page!")
-
-                return False
-
-            loginData = {
-                "username": "admin",
-                "password": "password",
-                "Login": "Login",
-                "user_token": token
-            }
-
-            res = self.session.post(loginUrl, data=loginData, headers=self.headers)
-
-            if "Login failed" in res.text:
-                print("[!] Login failed. Check credentials.")
-                return False
-
-            securityPage = self.session.get(securityUrl, headers=self.headers)
-            tokenMatch = re.search(r'name=[\'"]user_token[\'"]\s*value=[\'"]([^\'"]+)[\'"]', securityPage.text)
-            token = tokenMatch.group(1) if tokenMatch else ''
-
-            securityData = {
-                "security": "low",
-                "seclev_submit": "Submit",
-                "user_token": token
-            }
-
-            self.session.post(securityUrl, data=securityData, headers=self.headers)
-            # print("[+] Logged in to DVWA and set security level to low")
-
-            return True
-
-        except requests.RequestException as e:
-            print(f"[!] Login request failed: {e}")
-            return False

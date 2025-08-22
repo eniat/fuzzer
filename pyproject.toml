@@ -1,0 +1,18 @@
+[project]
+name = "uni-fuzzer"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+dependencies = [
+  "requests>=2.31",
+  "tqdm>=4.66",
+  "typer>=0.12",
+  "orjson>=3.10",
+  "PyYAML>=6.0",
+  "beautifulsoup4>=4.12",
+  "lxml>=5.2",
+  "selenium>=4.22",
+]
+
+[project.scripts]
+uni-fuzzer = "uni_fuzzer.core.cli:app"
