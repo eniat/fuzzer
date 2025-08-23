@@ -1,5 +1,5 @@
-import re
 import requests
+import threading
 from urllib.parse import urlparse, quote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
@@ -10,6 +10,7 @@ from uni_fuzzer.core.utility import get_cfg, isFuzzableField
 cfg = get_cfg()
 
 SQL = cfg["sqli"]["error_signatures"]
+MAX_SAMPLES_PER_GROUP = cfg["sqli"]["max_samples_per_group"]
 
 def detectSQLError(body):
     """
@@ -67,7 +68,8 @@ class SQLiFuzzer:
         if cfg["http"]["add_referer"]:
             self.headers["Referer"] = self.baseUrl
 
-        self.vulnerableForms = []
+        self.vulnerableForms = {}
+        self.lock = threading.Lock()
 
         if self.auth and self.loginUsername and self.loginPassword:
             ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
@@ -197,31 +199,53 @@ class SQLiFuzzer:
                     # Check for SQL Error
                     isErr, indicator = detectSQLError(body)
                     if isErr:
-                        hit = {
-                            "url": finUrl,
-                            "payload":raw,
-                            "status_code": status,
-                            "indicator": indicator,
-                            "response_snippet": body[:200],
-                            "type": "potential"
-                        }
+                        pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+                        resultsKey = (pageKey, indicator or "N/A", "potential")
 
-                        self.vulnerableForms.append(hit)
-                        results.append(hit)
+                        with self.lock:
+                            if resultsKey not in self.vulnerableForms:
+                                self.vulnerableForms[resultsKey] = {
+                                    "url": pageKey,
+                                    "payload": raw,
+                                    "payload_samples": [raw] if raw else [],
+                                    "status_code": status,
+                                    "indicator": indicator or "N/A",
+                                    "snippet": (body or "")[:200],
+                                    "count": 1,
+                                    "type": "potential",
+                                }
+
+                            else:
+                                entry = self.vulnerableForms[resultsKey]
+                                entry["count"] += 1
+                                if raw and len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                    entry["payload_samples"].append(raw)
                         continue
 
                     # Check for valid SQLi ran code
-                    if baseText or baseStatus is not None:
+                    if baseText or baseStatus:
                         isPos, posInd = detectSQLi(baseText, baseStatus, body, status)
+
                         if isPos:
-                            hit = {
-                                "url": finUrl,
-                                "payload": raw,
-                                "status_code": status,
-                                "indicator": posInd,
-                                "response_snippet": body[:200],
-                                "type": "vulnerable"
-                            }
-                            self.vulnerableForms.append(hit)
-                            results.append(hit)
-        return results
+                            pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+                            resultsKey = (pageKey, posInd or "N/A", "vulnerable")
+
+                            with self.lock:
+                                if resultsKey not in self.vulnerableForms:
+                                    self.vulnerableForms[resultsKey] = {
+                                        "url": pageKey,
+                                        "payload": raw,
+                                        "payload_samples": [raw] if raw else [],
+                                        "status_code": status,
+                                        "indicator": posInd or "N/A",
+                                        "snippet": (body or "")[:200],
+                                        "count": 1,
+                                        "type": "vulnerable",
+                                    }
+
+                                else:
+                                    entry = self.vulnerableForms[resultsKey]
+                                    entry["count"] += 1
+                                    if raw and len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                        entry["payload_samples"].append(raw)
+        return list(self.vulnerableForms.values())

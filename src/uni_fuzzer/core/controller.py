@@ -1,17 +1,34 @@
 import argparse
-
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import PurePosixPath
+from pathlib import PurePosixPath, Path
 
 from uni_fuzzer.crawler.crawler import Crawler
 from uni_fuzzer.fuzzers.path import PathFuzzer
 from uni_fuzzer.llm.semantic_llm import filterML
 from uni_fuzzer.fuzzers.xss import XSSFuzzer
 from uni_fuzzer.fuzzers.sqli import SQLiFuzzer
-
+from uni_fuzzer.core.reporting import crawlerPrint, fuzzerPrint
 from uni_fuzzer.core.utility import get_cfg, isFuzzableField
 cfg = get_cfg()
+
+WORDLIST_DIR = Path(__file__).resolve().parent.parent / "resources" / "wordlists"
+
+def sortWordlist(name):
+    """
+        Allows wordlist to be passed by name as well as full file location
+    """
+    # if it's a path that's valid return path
+    p = Path(name)
+    if p.exists():
+        return p
+
+    # Check resources/wordlists by short name
+    candidate = WORDLIST_DIR / f"{name}.txt"
+    if candidate.exists():
+        return candidate
+
+    raise FileNotFoundError(f"Wordlist '{name}' not found in {WORDLIST_DIR}")
 
 def getdirectories(path):
     """
@@ -76,9 +93,12 @@ def main():
     parser.add_argument("--auth", action="store_true", help="Use if webapp is behind a login page")
     parser.add_argument("--username", type=str, help="Username for Selenium login")
     parser.add_argument("--password", type=str, help="Password for Selenium login")
-    parser.add_argument("--login-path", type=str, help="Login path or absolute URL for Selenium")
+    parser.add_argument("--login-path", type=str, help="Login path or absolute URL")
 
     args = parser.parse_args()
+
+    if args.wordlist:
+        args.wordlist = sortWordlist(args.wordlist)
 
     # if --llm is used wordlist needs to be provided
     if args.llm and not args.wordlist:
@@ -130,31 +150,11 @@ def main():
             loginPath = args.login_path
         )
 
-        print("\n[+] Starting Crawler...")
 
         endpoints, forms = crawler.crawl(args.start_url)
         sharedSession = getattr(crawler, "session", None)
 
-        # Check that at least one endpoint is discovered
-        if endpoints:
-            print(f"{len(endpoints)} endpoints discovered.")
-        else:
-            print("No endpoints discovered.")
-
-        # Check that at least one form is discovered
-        if forms:
-            print(f"{len(forms)} forms discovered.")
-        else:
-            print("No forms discovered.")
-
-        # Print
-        print("\nEndpoints:")
-        for ep in endpoints:
-            print(f"  {ep['method']} {ep['url']} (params: {ep['params']})")
-
-        print("\nForms:")
-        for fm in forms:
-            print(f"  {fm['method']} {fm['url']} (fields: {fm['formFields']})")
+        crawlerPrint(endpoints, forms, output_to_file=args.output_to_file, filename="CrawlerOutput.txt")
 
     else:
 
@@ -185,6 +185,8 @@ def main():
             )
             endpoints, forms = crawler.crawl(args.start_url)
             sharedSession = getattr(crawler, "session", None)
+
+            crawlerPrint(endpoints, forms, output_to_file=args.output_to_file, filename="CrawlerOutput.txt")
 
             rawDomForms = forms[:]
 
@@ -223,7 +225,7 @@ def main():
                 d = getdirectories(p)
                 globalVisitedPaths.add(d)
 
-            print(f"[+] {len(endpoints)} endpoints & {len(forms)} forms discovered. Beginning fuzzing... \n")
+            print(f"[+] Beginning fuzzing... \n")
 
             def fuzzEndpoint(ep):
                 """
@@ -454,36 +456,8 @@ def main():
 
                     allVulnerabilities.extend(res)
 
-            if allVulnerabilities:
-                # Out put results if any returned
-                print("\n[+] Vulnerabilities discovered:")
+            fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file, filename="FuzzerOutput.txt")
 
-                for vuln in allVulnerabilities:
-                    if vuln["type"] == "interesting_200":
-                        print(f"  - [INTERESTING 200] {vuln['url']}")
-                    else:
-                        print(f"  - [{vuln['type'].upper()}] {vuln['url']}")
-                    print(f"    Payload:       {vuln['payload']}")
-                    print(f"    Status Code:   {vuln.get('status_code', 'N/A')}")
-                    print(f"    Indicator Hit: {vuln.get('indicator', 'N/A')}")
-                    print()
-
-                if args.output_to_file:
-                    with open("FuzzerOutput.txt", "w", encoding="utf-8", errors="replace") as f:
-                        for vuln in allVulnerabilities:
-                            if vuln["type"] == "interesting_200":
-                                f.write(f"  - [INTERESTING 200] {vuln['url']}\n")
-                            else:
-                                f.write(f"  - [{vuln['type'].upper()}] {vuln['url']}\n")
-                            f.write(f"  Payload:       {vuln['payload']}\n")
-                            f.write(f"  Status Code:   {vuln.get('status_code', 'N/A')}\n")
-                            f.write(f"  Indicator Hit: {vuln.get('indicator', 'N/A')}\n")
-                            f.write(f"  Snippet:       {vuln.get('response_snippet', '').replace(chr(10), ' ')[:200]}\n")
-                            f.write("-" * 50 + "\n")
-
-
-            else:
-                print("[-] No vulnerabilities found.")
 
         else:
             # Fuzz a single target
@@ -505,17 +479,7 @@ def main():
 
                 results = fuzzer.paramXSS()
 
-                if results:
-                    print("\n[+] XSS vulnerabilities discovered:")
-                    for vuln in results:
-                        print(f"  - [XSS] {vuln['url']}")
-                        print(f"    Payload:       {vuln['payload']}")
-                        print(f"    Status Code:   {vuln.get('status_code', 'N/A')}")
-                        print(f"    Snippet:       {vuln.get('snippet', '')}")
-                        print()
-
-                else:
-                    print("[-] No XSS vulnerabilities found.")
+                fuzzerPrint(results, output_to_file=args.output_to_file, filename="FuzzerOutput.txt")
 
             else:
 
@@ -542,35 +506,7 @@ def main():
 
                 results.extend(fuzzer.vulnerablePaths)
 
-                if results:
-                    print("\n[+] Vulnerabilities discovered:")
-
-                    for vuln in results:
-                        if vuln["type"] == "interesting_200":
-                            print(f"  - [INTERESTING 200] {vuln['url']}")
-                        else:
-                            print(f"  - [{vuln['type'].upper()}] {vuln['url']}")
-                        print(f"    Payload:       {vuln['payload']}")
-                        print(f"    Status Code:   {vuln.get('status_code', 'N/A')}")
-                        print(f"    Indicator Hit: {vuln.get('indicator', 'N/A')}")
-                        print()
-
-                    if args.output_to_file:
-                        with open("pathFuzzerOutput.txt", "w", encoding="utf-8", errors="replace") as f:
-                            for vuln in results:
-                                if vuln["type"] == "interesting_200":
-                                    f.write(f"  - [INTERESTING 200] {vuln['url']}\n")
-                                else:
-                                    f.write(f"  - [{vuln['type'].upper()}] {vuln['url']}\n")
-                                f.write(f"  Payload:       {vuln['payload']}\n")
-                                f.write(f"  Status Code:   {vuln.get('status_code', 'N/A')}\n")
-                                f.write(f"  Indicator Hit: {vuln.get('indicator', 'N/A')}\n")
-                                f.write(
-                                    f"  Snippet:       {vuln.get('response_snippet', '').replace(chr(10), ' ')[:200]}\n")
-                                f.write("-" * 50 + "\n")
-
-                else:
-                    print("[-] No vulnerabilities found.")
+                fuzzerPrint(results, output_to_file=args.output_to_file, filename="FuzzerOutput.txt")
 
 
 if __name__ == "__main__":

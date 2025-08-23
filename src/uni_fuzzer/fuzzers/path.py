@@ -11,6 +11,8 @@ from uni_fuzzer.auth.auth import login
 from uni_fuzzer.core.utility import get_cfg
 cfg = get_cfg()
 
+MAX_SAMPLES_PER_GROUP = cfg["path_traversal"]["max_samples_per_group"]
+
 class PathFuzzer:
 
     def __init__(self, baseUrl, wordlistPath= None, outputToFile = False, maxDepth= None,isSilent= False, loginUsername=None,loginPassword=None, loginPath=None, session =None, auth= None):
@@ -31,7 +33,7 @@ class PathFuzzer:
         # results storage
         self.visitedPaths = set()
         self.visitedFuzzPaths = set()
-        self.vulnerablePaths = []
+        self.vulnerablePaths = {}
         self.lock = threading.Lock()
 
         # Below set in config/defaults.yaml
@@ -193,25 +195,35 @@ class PathFuzzer:
                              "type": "interesting_200"
                              }
 
-                    self.vulnerablePaths.append(result)
                     return {"type": "interesting_200", "data": result}
 
             if resultType == "vulnerable":
+                with self.lock:
+                    kind = "param" if isParamFuzzing else "path"
+                    pageKey = (url if isParamFuzzing else urlparse(url).path).split("?", 1)[0].split("#", 1)[0]
+                    resultsKey = (pageKey, indicator or "N/A", kind)
 
-                result = {
-                    "url": url if isParamFuzzing else urlparse(url).path,
-                    "payload": payload,
-                    "type": "param" if isParamFuzzing else "path",
-                    "depth": depth + 1 if not isParamFuzzing else 0,
-                    "status_code": response.status_code,
-                    "indicator": indicator,
-                    "response_snippet": response.text[:200]
-                }
+                    # First timer
+                    if resultsKey not in self.vulnerablePaths:
+                        self.vulnerablePaths[resultsKey] = {
+                            "url": pageKey,
+                            "payload": payload,
+                            "payload_samples": [payload] if payload else [],
+                            "status_code": response.status_code,
+                            "indicator": indicator or "N/A",
+                            "snippet": (response.text or "")[:200],
+                            "count": 1,
+                            "type": kind,
+                        }
 
-                if not isParamFuzzing:
-                    self.vulnerablePaths.append(result)
+                    else:
+                        entry = self.vulnerablePaths[resultsKey]
+                        entry["count"] += 1
 
-                return {"type": "vulnerable", "data": result}
+                        if payload and len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                            entry["payload_samples"].append(payload)
+
+                    return {"type": "vulnerable", "data": self.vulnerablePaths[resultsKey]}
 
             elif resultType == "interesting" and not isParamFuzzing:
 
@@ -255,7 +267,6 @@ class PathFuzzer:
         originalQuery = parsed.query
 
         tasks = []
-        results = []
 
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             for payload in self.payloads:
@@ -267,10 +278,10 @@ class PathFuzzer:
                 tasks.append(executor.submit(self.sendRequest, fullUrl, 0, isParamFuzzing=True, payload= payload))
 
             for future in as_completed(tasks):
-                result = future.result()
-                if result and "data" in result:
-                    results.append(result["data"])
-        return results
+                _ = future.result()
+
+        grouped = [v for (k_url, k_ind, k_kind), v in self.vulnerablePaths.items() if k_kind == "param"]
+        return grouped
 
 
     def getBaseline(self):

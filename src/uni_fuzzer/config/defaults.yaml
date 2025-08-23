@@ -45,6 +45,7 @@ fuzz:
     - default
 
 path_traversal:
+  max_samples_per_group: 3
   indicators:
     - "root:x:0:0"
     - "daemon:x"
@@ -89,9 +90,10 @@ xss:
     - "javascript:alert(1)"
   dom_delay_seconds: 0.25
   regex:
-    script: "<script[^>]*>.*?<!--\\s*({token})\\s*-->.*?</script>"
+    script: "<script[^>]*>(?:(?!</script>).)*({token})(?:(?!</script>).)*</script>"
     attr: "\\bon\\w+\\s*=\\s*(['\\\"]).*?({token}).*?\\1"
     jsurl: "(?:href|src)\\s*=\\s*(['\\\"])\\s*javascript:.*?({token}).*?\\1"
+  max_samples_per_group: 3
 
 sqli:
   error_signatures:
@@ -112,6 +114,7 @@ sqli:
     - "quoted string not properly terminated"
   similarity_threshold: 0.90
   size_delta_threshold: 50
+  max_samples_per_group: 3
 
 paths:
   file_extensions:

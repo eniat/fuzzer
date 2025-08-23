@@ -4,7 +4,7 @@ import random
 import time
 from urllib.parse import urljoin, urlparse, quote
 from uuid import uuid4
-from html import escape
+from html import escape, unescape
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -20,6 +20,11 @@ SCRIPT_RE = cfg["xss"]["regex"]["script"]
 ATTR_RE   = cfg["xss"]["regex"]["attr"]
 JSURL_RE  = cfg["xss"]["regex"]["jsurl"]
 
+JS_STRINGS   = re.compile(r"""(['"])(?:\\.|(?!\1).)*\1""", re.S)
+JS_LINECOM   = re.compile(r"//[^\n\r]*")
+JS_BLOCKCOM  = re.compile(r"/\*.*?\*/", re.S)
+SCRIPT_BLOCK = re.compile(r"<script[^>]*>(.*?)</script>", re.I | re.S)
+
 # Cache for regex objects to avoid recompiling
 _regex_cache = {}
 
@@ -28,26 +33,32 @@ SQL = cfg["sqli"]["error_signatures"]
 
 dom_payloads = cfg["xss"]["dom_payloads"]
 
+MAX_SAMPLES_PER_GROUP = cfg["xss"]["max_samples_per_group"]
+
 def canary(payload, token):
     """
         Append payload with unique token
     """
-    return f"{payload}<!--{token}-->"
+    return f"{payload}{token}"
 
 
 def detectXSS(body, token, markedPayload):
     """
         If token appears then it's worked
     """
-    lowerBody = body.lower()
-    token = token.lower()
+    lowerBody = (body or "").lower()
+    token = (token or "").lower()
 
-    if token not in lowerBody:
-        return False
+    lowerBodyU = unescape(body or "").lower()
+
+    if token not in lowerBody and token not in lowerBodyU:
+        return False, None
 
     # If only payload appears its usually safe
-    if escape(markedPayload, quote=True).lower() in lowerBody:
-        return False
+    escPayload = escape(str(markedPayload or ""), quote=True).lower()
+
+    if escPayload in lowerBody or escPayload in lowerBodyU:
+        return False, None
 
     # cache regex for this token
     if token not in _regex_cache:
@@ -64,14 +75,39 @@ def detectXSS(body, token, markedPayload):
     script_re, attr_re, jsurl_re = _regex_cache[token]
 
     # Filter SQL errors
-    if any(err in lowerBody for err in SQL):
-        return False
+    if any(err.lower() in lowerBody for err in SQL) or any(err.lower() in lowerBodyU for err in SQL):
+        return False, None
+
+    # Check if token survives removal of strings ect
+    if script_re.search(lowerBodyU):
+        for blk in SCRIPT_BLOCK.findall(lowerBodyU):
+            cleaned = JS_BLOCKCOM.sub("", blk)
+            cleaned = JS_LINECOM.sub("", cleaned)
+            cleaned = JS_STRINGS.sub("", cleaned)
+            if token in cleaned.lower():
+                return True, "script_ctx"
+
+    # fallback
+    if script_re.search(lowerBody):
+        for blk in SCRIPT_BLOCK.findall(lowerBody):
+            cleaned = JS_BLOCKCOM.sub("", blk)
+            cleaned = JS_LINECOM.sub("", cleaned)
+            cleaned = JS_STRINGS.sub("", cleaned)
+            if token in cleaned.lower():
+                return True, "script_ctx"
 
     # Check if xss is in dangerous contexts
-    if script_re.search(body) or attr_re.search(body) or jsurl_re.search(body):
-        return True
+    if attr_re.search(lowerBodyU):
+        return True, "attr_ctx"
+    if jsurl_re.search(lowerBodyU):
+        return True, "jsurl_ctx"
 
-    return False
+    if attr_re.search(lowerBody):
+        return True, "attr_ctx"
+    if jsurl_re.search(lowerBody):
+        return True, "jsurl_ctx"
+
+    return False, None
 
 
 class XSSFuzzer:
@@ -139,12 +175,14 @@ class XSSFuzzer:
             response = self.session.get(url, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
 
             # XSS detection
-            if detectXSS(response.text, self.token, markedPayload):
+            ok, indicator = detectXSS(response.text, self.token, markedPayload)
+            if ok:
                 result = {
                     "url": url,
                     "payload": payload,
                     "status_code": response.status_code,
-                    "snippet": response.text[:200]
+                    "indicator": indicator or "N/A",
+                    "snippet": response.text[:200],
                 }
                 self.vulnerableParams.append(result)
                 return {"type": "vulnerable", "data": result}
@@ -175,7 +213,7 @@ class XSSFuzzer:
         originalQuery = parsed.query
 
         tasks = []
-        results = []
+        results = {}
 
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             for payload in self.payloads:
@@ -186,18 +224,48 @@ class XSSFuzzer:
                 fullUrl = f"{baseNoQuery}?{fuzzedQuery}"
 
                 tasks.append(executor.submit(self.sendRequest, fullUrl,payload=payload, markedPayload=markedPayload))
+
             # Collect results as requests complete
             for future in as_completed(tasks):
-                result = future.result()
-                if result and "data" in result:
-                    results.append(result["data"])
-        return results
+
+                out = future.result()
+
+                if not out or "data" not in out:
+                    continue
+
+                data = out["data"]
+                finUrl = data.get("url") or ""
+                indicator = data.get("indicator") or "N/A"
+                raw = data.get("payload")
+
+                pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+                resultsKey = (pageKey, indicator)
+
+                if resultsKey not in results:
+
+                    results[resultsKey] = {
+                        "url": pageKey,
+                        "payload": raw,
+                        "payload_samples": [raw],
+                        "status_code": data.get("status_code"),
+                        "indicator": indicator or "N/A",
+                        "snippet": (data.get("snippet") or "")[:200],
+                        "count": 1,
+                    }
+                else:
+                    entry = results[resultsKey]
+                    entry["count"] += 1
+                    # Cap the examples
+                    if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                        entry["payload_samples"].append(raw)
+
+        return list(results.values())
 
     def formXSS(self, forms):
         """
             Takes the forms retrieved by the crawler and fuzzes them for reflected XSS
         """
-        results = []
+        results = {}
 
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             for form in forms:
@@ -270,22 +338,39 @@ class XSSFuzzer:
 
 
                     # Check for XSS
-                    if detectXSS(res.text, self.token, marked):
-                        results.append({
-                            "url": finUrl,
-                            "payload": raw,
-                            "status_code": res.status_code,
-                            "snippet": res.text[:200]
-                        })
+                    ok, indicator = detectXSS(res.text, self.token, marked)
+                    if not ok:
+                        continue
 
-        return results
+                    pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+                    resultsKey = (pageKey, (indicator or "N/A"))
+
+                    if resultsKey not in results:
+
+                        results[resultsKey] = {
+                            "url": pageKey,
+                            "payload": raw,
+                            "payload_samples": [raw],
+                            "status_code": res.status_code,
+                            "indicator": indicator ,
+                            "snippet": (res.text or "")[:200],
+                            "count": 1,
+                        }
+                    else:
+                        entry = results[resultsKey]
+                        entry["count"] += 1
+                        # Cap the examples
+                        if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                            entry["payload_samples"].append(raw)
+
+            return list(results.values())
 
 
     def storedXSS(self, forms,endpoints=None):
         """
             Submits payload then revisits to see if payload still there
         """
-        results = []
+        results = {}
         pages = set()
 
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
@@ -409,24 +494,42 @@ class XSSFuzzer:
 
                 # Check if payloads still persists
                 for raw, marked in markedPayloads:
-                    if detectXSS(body, self.token, marked):
-                        results.append({
-                            "url": finUrl,
+                    # Check for XSS
+                    ok, indicator = detectXSS(res.text, self.token, marked)
+                    if not ok:
+                        continue
+
+                    pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+                    resultsKey = (pageKey, (indicator or "N/A"))
+
+                    if resultsKey not in results:
+
+                        results[resultsKey] = {
+                            "url": pageKey,
                             "payload": raw,
+                            "payload_samples": [raw],
                             "status_code": res.status_code,
-                            "snippet": body[:200]
-                        })
+                            "indicator": indicator ,
+                            "snippet": (res.text or "")[:200],
+                            "count": 1,
+                        }
+                    else:
+                        entry = results[resultsKey]
+                        entry["count"] += 1
+                        # Cap the examples
+                        if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                            entry["payload_samples"].append(raw)
+
+        return list(results.values())
                         # Add break if you just want to see its vulnerable, without lists all successful payloads
                         #break
-
-        return results
 
 
     def domXSS(self, forms= None, endpoints= None):
         """
             Submits payload via query then loads and checks JS for payload
         """
-        results =[]
+        results = {}
 
         parsedBase = urlparse(self.baseUrl)
         base = f"{parsedBase.scheme}://{parsedBase.netloc}"
@@ -486,7 +589,7 @@ class XSSFuzzer:
 
         # If no fuzzable URLs found then return empty
         if not candidates:
-            return results
+            return list(results.values())
 
         # Configure the selenium webdriver
         options = Options()
@@ -516,7 +619,7 @@ class XSSFuzzer:
                 ):
                     if not self.isSilent:
                         print("[-] Selenium login failed")
-                    return results
+                    return list(results.values())
 
                 try:
                     jar = RequestsCookieJar()
@@ -563,18 +666,36 @@ class XSSFuzzer:
                     body = driver.page_source or ""
 
                     # Check if DOM XSS worked
-                    if self.token.lower() in body.lower() and detectXSS(body, self.token, marked):
-                        results.append({
-                            "url": finUrl,
-                            "payload": raw,
-                            "status_code": 200,
-                            "snippet": body[:200]
-                        })
-                        seen.add(pageKey)
+                    if self.token.lower() in body.lower():
+                        # Check for XSS
+                        ok, indicator = detectXSS(body, self.token, marked)
+                        if not ok:
+                            continue
+
+                        pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+                        resultsKey = (pageKey, (indicator or "N/A"))
+
+                        if resultsKey not in results:
+
+                            results[resultsKey] = {
+                                "url": pageKey,
+                                "payload": raw,
+                                "payload_samples": [raw],
+                                "status_code": 200,
+                                "indicator": indicator ,
+                                "snippet": body[:200],
+                                "count": 1,
+                            }
+                        else:
+                            entry = results[resultsKey]
+                            entry["count"] += 1
+                            # Cap the examples
+                            if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                entry["payload_samples"].append(raw)
 
                 except Exception:
                     continue
         finally:
             driver.quit()
 
-        return results
+        return list(results.values())
