@@ -95,5 +95,5 @@ def fuzzerPrint(vulnerabilities, output_to_file= False, filename="FuzzerOutput.t
                         f.write(f"  Snippet:       {snippet}\n")
 
                     f.write("-" * 50 + "\n")
-        else:
-            print("[-] No vulnerabilities found.")
+    else:
+        print("[-] No vulnerabilities found.")

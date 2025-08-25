@@ -251,6 +251,7 @@ class XSSFuzzer:
                         "indicator": indicator or "N/A",
                         "snippet": (data.get("snippet") or "")[:200],
                         "count": 1,
+                        "type": "xss_param"
                     }
                 else:
                     entry = results[resultsKey]
@@ -355,6 +356,7 @@ class XSSFuzzer:
                             "indicator": indicator ,
                             "snippet": (res.text or "")[:200],
                             "count": 1,
+                            "type": "xss_form"
                         }
                     else:
                         entry = results[resultsKey]
@@ -512,6 +514,7 @@ class XSSFuzzer:
                             "indicator": indicator ,
                             "snippet": (res.text or "")[:200],
                             "count": 1,
+                            "type": "xss_stored"
                         }
                     else:
                         entry = results[resultsKey]
@@ -685,6 +688,7 @@ class XSSFuzzer:
                                 "indicator": indicator ,
                                 "snippet": body[:200],
                                 "count": 1,
+                                "type": "xss_dom"
                             }
                         else:
                             entry = results[resultsKey]
