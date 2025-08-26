@@ -14,4 +14,4 @@ dependencies = [
 ]
 
 [project.scripts]
-fuzzer = "uni_fuzzer.core.cli:main"
+fuzz = "uni_fuzzer.core.cli:main"

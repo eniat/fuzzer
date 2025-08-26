@@ -112,9 +112,16 @@ sqli:
     - "odbc sql server driver"
     - "sqlstate"
     - "quoted string not properly terminated"
-  similarity_threshold: 0.90
-  size_delta_threshold: 50
+  blind_markers:
+    - "sleep("
+    - "benchmark("
+    - "waitfor delay"
+    - "pg_sleep("
   max_samples_per_group: 3
+  timing_threshold_ms: 2000
+  blind_timing_factor: 2.0
+  blind_time: 5
+  timeout_blind: 12
 
 paths:
   file_extensions:
