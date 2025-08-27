@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from requests.cookies import RequestsCookieJar
+from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import seleniumLogin, login
 
@@ -109,6 +110,34 @@ def detectXSS(body, token, markedPayload):
 
     return False, None
 
+def probeReflexivity(session, url,method, fields, fuzzField, headers, token):
+    """
+        Probe to check if reflected back for form fuzzing
+    """
+    probe = f"xssprobe-{token}"
+
+    try:
+        if method == "POST":
+            data = {f: (probe if f in fuzzField else "test") for f in fields}
+            res = session.post(url, data=data, headers=headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
+
+        else:
+            params = [f"{f}={quote(probe, safe='')}" if f in fuzzField else f"{f}=test" for f in fields]
+            separator = "&" if "?" in url else "?"
+            fullUrl = f"{url}{separator}{'&'.join(params)}"
+
+            res = session.get(fullUrl, headers=headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
+
+        body = res.text or ""
+        low = body.lower()
+
+        if probe.lower() in low or unescape(body).lower().find(probe.lower()) != -1:
+            return True
+
+    except Exception:
+        pass
+
+    return False
 
 class XSSFuzzer:
 
@@ -122,7 +151,16 @@ class XSSFuzzer:
         self.token = f"XSSCanary-{uuid4().hex[:8]}"
         self.headless = headless
 
+        self.tokenLow = self.token.lower()
+        self.tokenB = self.token.encode("utf-8", errors="ignore")
+
         self.session = session or requests.Session()
+        if session is None:
+            mw = int(cfg["concurrency"]["max_workers"])
+            adapter = HTTPAdapter(pool_connections=mw, pool_maxsize=mw, max_retries=0)
+            self.session.mount("http://", adapter)
+            self.session.mount("https://", adapter)
+            self.session.trust_env = False
         self.headers = {"User-Agent": cfg["http"]["user_agent"]}
 
         if cfg["http"]["add_referer"]:
@@ -166,23 +204,38 @@ class XSSFuzzer:
             # On error raise exception
             raise RuntimeError(f"[-] Failed to load wordlist from {self.wordlistPath}: {e}")
 
-    def sendRequest(self, url, payload=None, markedPayload= None):
+    def sendRequest(self, url, payload=None, markedPayload= None, method="GET", data=None):
         """
             Send a single GET request and check for success
         """
         try:
+            if method == "POST":
+                response = self.session.post( url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["submit"])
 
-            response = self.session.get(url, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
+            else:
+                response = self.session.get(url, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
 
-            # XSS detection
-            ok, indicator = detectXSS(response.text, self.token, markedPayload)
+            ctype = (response.headers.get("Content-Type") or "").lower()
+            if ctype and ("html" not in ctype and "xml" not in ctype and "javascript" not in ctype):
+                return None
+
+            content = response.content or b""
+
+            if self.tokenB not in content:
+                return None
+
+            enc = response.encoding or "utf-8"
+            body = content.decode(enc, errors="ignore")
+
+            # deeper XSS detection
+            ok, indicator = detectXSS(body, self.token, markedPayload)
             if ok:
                 result = {
                     "url": url,
                     "payload": payload,
                     "status_code": response.status_code,
                     "indicator": indicator or "N/A",
-                    "snippet": response.text[:200],
+                    "snippet": body[:200],
                 }
                 self.vulnerableParams.append(result)
                 return {"type": "vulnerable", "data": result}
@@ -217,7 +270,7 @@ class XSSFuzzer:
 
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             for payload in self.payloads:
-                # Replace FUZZ with the payload, uniqely mark it, encode it for URL injection
+                # Replace FUZZ with the payload, uniquely mark it, encode it for URL injection
                 markedPayload = canary(payload, self.token)
                 encoded = quote(markedPayload, safe="")
                 fuzzedQuery = originalQuery.replace("FUZZ", encoded)
@@ -268,11 +321,21 @@ class XSSFuzzer:
         """
         results = {}
 
+        prebuiltPayloads = []
+        seen = set()
+
+        for raw in self.payloads:
+            if raw in seen:
+                continue
+
+            seen.add(raw)
+            marked = canary(raw, self.token)
+            enc = quote(marked, safe="")
+            prebuiltPayloads.append((raw, marked, enc))
+
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             for form in forms:
                 tasks = []
-                # To track future information for saving
-                ctx = {}
 
                 url = form.get("url")
                 method = (form.get("method") or "POST").upper()
@@ -287,47 +350,41 @@ class XSSFuzzer:
                 if not url.startswith("http"):
                     url = f"{parsed.scheme}://{parsed.netloc}{url}"
 
-                for raw in self.payloads:
-                    marked = canary(raw, self.token)
+                fuzzField = [f for f in fields if isFuzzableField(f)]
 
-                    if method == "POST":
-                        # POST form fuzzing
-                        data = {}
+                if not fuzzField:
+                    continue
 
-                        for field in fields:
-                            # Inject payload into fuzzable fields
-                            if isFuzzableField(field):
-                                data[field] = marked
+                if not probeReflexivity(self.session, url, method, fields, fuzzField, self.headers, self.token):
+                    continue
 
-                            else:
-                                data[field] = "test"
+                if method == "POST":
+                    # POST form fuzzing
+                    baseD = {f: "test" for f in fields}
+                    for raw, marked, _enc in prebuiltPayloads:
+                        data = baseD.copy()
+                        for f in fuzzField:
+                            data[f] = marked
 
-
-                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["submit"])
-
+                        fut = executor.submit(self.sendRequest, url, raw, marked, "POST", data)
                         tasks.append(fut)
-                        ctx[fut] = (url, raw, marked)
 
-                    else:
-                        # GET form fuzzing
-                        params = []
-                        for field in fields:
-                            if isFuzzableField(field):
-                                params.append(f"{field}={quote(marked, safe='')}")
+                else:
+                    # GET form fuzzing
+                    baseP = [f"{f}=test" for f in fields]
+                    index = {f: i for i, f in enumerate(fields)}
+                    separator = "&" if "?" in url else "?"
 
-                            else:
-                                params.append(f"{field}=test")
+                    for raw, marked, enc in prebuiltPayloads:
+                        params = list(baseP)
+                        for f in fuzzField:
+                            params[index[f]] = f"{f}={enc}"
 
-                        # Construct GET request
-                        separator = "&" if "?" in url else "?"
                         fullUrl = f"{url}{separator}{'&'.join(params)}"
-
-                        fut = executor.submit( self.session.get, fullUrl, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
-
+                        fut = executor.submit(self.sendRequest, fullUrl, raw, marked, "GET", None)
                         tasks.append(fut)
-                        ctx[fut] = (fullUrl, raw,marked)
 
-                # collect responses as they finish
+                # collect responses at end
                 for fut in as_completed(tasks):
                     try:
                         res = fut.result()
@@ -335,16 +392,15 @@ class XSSFuzzer:
                     except Exception:
                         continue
 
-                    finUrl, raw, marked = ctx[fut]
-
-
-                    # Check for XSS
-                    ok, indicator = detectXSS(res.text, self.token, marked)
-                    if not ok:
+                    if not res or "data" not in res:
                         continue
 
+                    data = res["data"]
+                    finUrl = data.get("url") or url
                     pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                    resultsKey = (pageKey, (indicator or "N/A"))
+                    indicator = data.get("indicator") or "N/A"
+
+                    resultsKey = (pageKey, indicator)
 
                     if resultsKey not in results:
 
@@ -352,9 +408,9 @@ class XSSFuzzer:
                             "url": pageKey,
                             "payload": raw,
                             "payload_samples": [raw],
-                            "status_code": res.status_code,
-                            "indicator": indicator ,
-                            "snippet": (res.text or "")[:200],
+                            "status_code": data.get("status_code"),
+                            "indicator": indicator,
+                            "snippet": (data.get("snippet") or "")[:200],
                             "count": 1,
                             "type": "xss_form"
                         }
@@ -491,7 +547,7 @@ class XSSFuzzer:
                 lowerBody = body.lower()
 
                 # If no token at all continue
-                if self.token.lower() not in lowerBody:
+                if self.tokenLow not in lowerBody:
                     continue
 
                 # Check if payloads still persists
@@ -669,7 +725,7 @@ class XSSFuzzer:
                     body = driver.page_source or ""
 
                     # Check if DOM XSS worked
-                    if self.token.lower() in body.lower():
+                    if self.tokenLow in body.lower():
                         # Check for XSS
                         ok, indicator = detectXSS(body, self.token, marked)
                         if not ok:

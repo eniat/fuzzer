@@ -4,6 +4,8 @@ import re
 from urllib.parse import urlparse, quote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from requests.adapters import HTTPAdapter
+
 from uni_fuzzer.auth.auth import login
 
 from uni_fuzzer.core.utility import get_cfg, isFuzzableField
@@ -77,6 +79,12 @@ class SQLiFuzzer:
 
         # Authentication
         self.session = session or requests.Session()
+        if session is None:
+            mw = int(cfg["concurrency"]["max_workers"])
+            adapter = HTTPAdapter(pool_connections=mw, pool_maxsize=mw, max_retries=0)
+            self.session.mount("http://", adapter)
+            self.session.mount("https://", adapter)
+            self.session.trust_env = False
         self.loginUsername = loginUsername
         self.loginPassword = loginPassword
         self.loginPath = loginPath

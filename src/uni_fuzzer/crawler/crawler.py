@@ -8,6 +8,7 @@ from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs, urldefrag
 from requests.cookies import RequestsCookieJar
+from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import seleniumLogin, login
 
@@ -80,6 +81,12 @@ class Crawler:
         self.discoveredForms = []
 
         self.session = requests.Session()
+
+        mw = int(cfg["concurrency"]["max_workers"])
+        adapter = HTTPAdapter(pool_connections=mw, pool_maxsize=mw, max_retries=0)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+        self.session.trust_env = False
 
         self.driver = None
 

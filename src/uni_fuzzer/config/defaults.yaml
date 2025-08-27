@@ -37,12 +37,15 @@ fuzz:
     - max_file_size
     - step
     - create_db
-    - password
     - btnclear
     - btnsign
     - rememberme
     - captcha
     - default
+    - security_level
+    - bug
+    - mail_activation
+    - create_db'
 
 path_traversal:
   max_samples_per_group: 3

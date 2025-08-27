@@ -25,6 +25,7 @@ def buildParser():
     parser.add_argument("--username", type=str, help="Username for Selenium login")
     parser.add_argument("--password", type=str, help="Password for Selenium login")
     parser.add_argument("--login-path", type=str, help="Login path or absolute URL")
+    parser.add_argument("--report-all", action="store_true", default=False, help="Include potential and path 'interesting' findings in the report.")
 
     return parser
 

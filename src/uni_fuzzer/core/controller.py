@@ -233,7 +233,14 @@ def run(args):
                         fuzzer.fuzzPath(path)
 
                     if fuzzer.vulnerablePaths:
-                        results.extend(fuzzer.vulnerablePaths)
+                        results.extend(list(fuzzer.vulnerablePaths.values()))
+
+
+                    if args.report_all and getattr(fuzzer, "interesting200", None):
+                        results.extend(fuzzer.interesting200)
+
+                    if args.report_all and getattr(fuzzer, "interesting", None):
+                        results.extend(fuzzer.interesting)
 
                 if args.fuzz_params and params:
 
@@ -381,7 +388,10 @@ def run(args):
                             elif vuln.get("type") == "potential":
                                 vuln["type"] = "sqli_potential"
 
-                        results.extend(res)
+                        results.extend([v for v in res if v.get("type") == "sqli"])
+
+                        if args.report_all:
+                            results.extend([v for v in res if v.get("type") == "sqli_potential"])
 
                 return results
 
@@ -479,6 +489,11 @@ def run(args):
                 if args.fuzz_params:
                     results.extend(fuzzer.fuzzParams())
 
-                results.extend(fuzzer.vulnerablePaths)
+                results.extend(list(fuzzer.vulnerablePaths.values()))
+
+                if args.report_all and getattr(fuzzer, "interesting200", None):
+                    results.extend(fuzzer.interesting200)
+                if args.report_all and getattr(fuzzer, "interesting", None):
+                    results.extend(fuzzer.interesting)
 
                 fuzzerPrint(results, output_to_file=args.output_to_file, filename="FuzzerOutput.txt")

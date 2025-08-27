@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath
 from difflib import SequenceMatcher
 
+from requests.adapters import HTTPAdapter
+
 from uni_fuzzer.auth.auth import login
 
 from uni_fuzzer.core.utility import get_cfg
@@ -25,6 +27,12 @@ class PathFuzzer:
 
         # Authentication
         self.session = session or requests.Session()
+        if session is None:
+            mw = int(cfg["concurrency"]["max_workers"])
+            adapter = HTTPAdapter(pool_connections=mw, pool_maxsize=mw, max_retries=0)
+            self.session.mount("http://", adapter)
+            self.session.mount("https://", adapter)
+            self.session.trust_env = False
         self.loginUsername = loginUsername
         self.loginPassword = loginPassword
         self.loginPath = loginPath
@@ -35,6 +43,8 @@ class PathFuzzer:
         self.visitedFuzzPaths = set()
         self.vulnerablePaths = {}
         self.lock = threading.Lock()
+        self.interesting200 = []
+        self.interesting = []
 
         # Below set in config/defaults.yaml
         self.indicators = cfg["path_traversal"]["indicators"]
@@ -137,7 +147,7 @@ class PathFuzzer:
 
             for future in as_completed(tasks):
                 result  = future.result()
-                if result and result["type"] == "interesting":
+                if result and result["type"] == "interesting_200":
                     interestingResults.append((
                         result["data"]["url"],
                         result["data"]["depth"]))
@@ -187,13 +197,15 @@ class PathFuzzer:
                     # if not self.isSilent:
                     #     print(f"[+]Discovered interesting path: {url} (Similarity: {similarity:.2f})")
 
-                    result= {"url": urlparse(url).path,
+                    result= {"url": url,
                              "depth": depth + 1,
                              "status_code": status,
                              "payload": payload,
                              "response_snippet": response.text[:200],
                              "type": "interesting_200"
                              }
+                    with self.lock:
+                        self.interesting200.append(result)
 
                     return {"type": "interesting_200", "data": result}
 
@@ -201,12 +213,13 @@ class PathFuzzer:
                 with self.lock:
                     kind = "param" if isParamFuzzing else "path"
                     pageKey = (url if isParamFuzzing else urlparse(url).path).split("?", 1)[0].split("#", 1)[0]
+
                     resultsKey = (pageKey, indicator or "N/A", kind)
 
                     # First timer
                     if resultsKey not in self.vulnerablePaths:
                         self.vulnerablePaths[resultsKey] = {
-                            "url": pageKey,
+                            "url": url,
                             "payload": payload,
                             "payload_samples": [payload] if payload else [],
                             "status_code": response.status_code,
@@ -227,6 +240,15 @@ class PathFuzzer:
 
             elif resultType == "interesting" and not isParamFuzzing:
 
+                with self.lock:
+                    self.interesting.append({
+                        "url": url,
+                        "depth": depth + 1,
+                        "status_code": status,
+                        "payload": payload,
+                        "type": "interesting"
+                    })
+
                 #Prevent recursion on files
                 parsed = urlparse(url).path.lower()
 
@@ -236,7 +258,7 @@ class PathFuzzer:
                 return {
                     "type": "interesting",
                     "data": {
-                        "url": urlparse(url).path,
+                        "url": url,
                         "depth": depth + 1,
                         "status_code": status,
                         "payload": payload
