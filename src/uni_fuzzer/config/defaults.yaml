@@ -33,7 +33,6 @@ fuzz:
     - login
     - upload
     - change
-    - submit
     - max_file_size
     - step
     - create_db
@@ -125,6 +124,13 @@ sqli:
   blind_timing_factor: 2.0
   blind_time: 5
   timeout_blind: 12
+  auto_submit_keys:
+    - "submit"
+    - "btn"
+    - "button"
+    - "search"
+    - "btnsign"
+    - "btnclear"
 
 paths:
   file_extensions:

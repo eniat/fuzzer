@@ -1,7 +1,7 @@
 import requests
 import threading
 import re
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse, quote, urlencode
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from requests.adapters import HTTPAdapter
@@ -13,10 +13,13 @@ cfg = get_cfg()
 
 SQL = cfg["sqli"]["error_signatures"]
 MAX_SAMPLES_PER_GROUP = cfg["sqli"]["max_samples_per_group"]
+
 TIMING_THRESHOLD_MS = cfg["sqli"]["timing_threshold_ms"]
 BLIND_MARKERS = cfg["sqli"]["blind_markers"]
 BLIND_FACTOR  = cfg["sqli"]["blind_timing_factor"]
 BLIND_TIME = cfg["sqli"]["blind_time"]
+
+AUTO_SUBMIT_KEYS = cfg["sqli"]["auto_submit_keys"]
 
 def detectSQLError(body):
     """
@@ -37,6 +40,19 @@ def isBlindPayload (payload):
     low = (payload or "").lower()
     return any(mark in low for mark in BLIND_MARKERS) and bool(re.search(r"\d", low))
 
+def autoSubmits(html, params):
+    """
+        If there is a button summits it with the name as the field
+    """
+    if not html:
+        return params
+
+    lowHtml = html.lower()
+    for key in AUTO_SUBMIT_KEYS:
+        if key in lowHtml:
+            params[key.capitalize()] = key.capitalize()
+    return params
+
 def detectSQLiBlind(baseMs, testMs, thresholdMs= TIMING_THRESHOLD_MS, factor=BLIND_FACTOR):
     """
         Detects SQLi blind by checking timing difference
@@ -56,17 +72,31 @@ def expandTimeToken(payload, seconds=BLIND_TIME):
 
 def detectSQLiContent(baseHtml, html):
     """
-        Checks if rows or records appear in html
+        Detect SQLi content by comparing the basehtml with the html after and assessing differences
     """
     b = (baseHtml or "").lower()
     h = (html or "").lower()
-    rowsB = b.count("<tr")
-    rowsH = h.count("<tr")
 
-    lisB  = baseHtml.count("<li")
-    lisH  = html.count("<li")
+    if re.search(r"user id (exists|is missing) in the database", h, flags=re.I) \
+            and not re.search(r"user id (exists|is missing) in the database", b, flags=re.I):
+        return False
 
-    return (rowsH > rowsB) or (lisH > lisB)
+    preB, preH = b.count("<pre"), h.count("<pre")
+    trB, trH = b.count("<tr"), h.count("<tr")
+    tdB, tdH = b.count("<td"), h.count("<td")
+
+    Pres = (preH - preB) >= 2
+    Tabs = (trH - trB) >= 2 and (tdH - tdB) >= 2
+
+    if Pres or Tabs:
+
+        if Pres:
+            return True
+
+        if (trH > trB) and (tdH > tdB):
+            return True
+
+    return False
 
 class SQLiFuzzer:
 
@@ -113,7 +143,7 @@ class SQLiFuzzer:
             return self.wordlistPath
 
         try:
-            with open(self.wordlistPath, 'r', encoding='utf-8', errors='replace') as f:
+            with open(self.wordlistPath, 'r', encoding='utf-8', errors='ignore') as f:
                 # Strips the lines
                 return [line.strip() for line in f if line.strip()]
         except Exception as e:
@@ -128,7 +158,7 @@ class SQLiFuzzer:
             elapses = []
 
             if method == "POST":
-                baseData = {f: "test" for f in fields}
+                baseData = {f: "1" for f in fields}
 
                 res = self.session.post(
                     endpoint,
@@ -153,12 +183,21 @@ class SQLiFuzzer:
                     elapses.append(r.elapsed.total_seconds() * 1000.0)
 
             else:
-                baseQuery = "&".join(f"{f}=test" for f in fields)
-                sep = "&" if "?" in endpoint else "?"
-                baseUrl = f"{endpoint}{sep}{baseQuery}"
+                res = self.session.get(
+                    endpoint,
+                    headers=self.headers,
+                    timeout=cfg["sqli"]["timeout_blind"],
+                    allow_redirects=cfg["http"]["redirects"]["baseline_get"]
+                )
+
+                html = res.text or ""
+
+                params = {f: "1" for f in fields}
+                params = autoSubmits(html, params)
 
                 res = self.session.get(
-                    baseUrl,
+                    endpoint,
+                    params=params,
                     headers=self.headers,
                     timeout=cfg["sqli"]["timeout_blind"],
                     allow_redirects=cfg["http"]["redirects"]["baseline_get"]
@@ -166,12 +205,10 @@ class SQLiFuzzer:
 
                 baseText, baseStatus = res.text or "", res.status_code
 
-                query = "&".join(f"{f}=1" for f in fields)
-                baseUrl = f"{endpoint}{sep}{query}"
-
                 for _ in range(3):
                     r = self.session.get(
-                        baseUrl,
+                        endpoint,
+                        params=params,
                         headers=self.headers,
                         timeout=cfg["sqli"]["timeout_blind"],
                         allow_redirects=cfg["http"]["redirects"]["baseline_get"]
@@ -234,19 +271,22 @@ class SQLiFuzzer:
 
                     else:
                         # GET form fuzzing
-                        params = []
+                        params = {}
                         for field in fields:
                             if isFuzzableField(field):
-                                params.append(f"{field}={quote(payload, safe='')}")
+                                params[field] = payload
 
                             else:
-                                params.append(f"{field}=test")
+                                params[field] = "test"
+
+                        params = autoSubmits(baseText, params)
 
                         # Contruct GET requests
+                        logParams = [f"{k}={quote(str(v), safe='')}" for k, v in params.items()]
                         separator = "&" if "?" in url else "?"
-                        fullUrl = f"{url}{separator}{'&'.join(params)}"
+                        fullUrl = f"{url}{separator}{'&'.join(logParams)}"
 
-                        fut = executor.submit( self.session.get, fullUrl, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
+                        fut = executor.submit(self.session.get, url, params =params, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
 
                         tasks.append(fut)
                         ctx[fut] = (fullUrl, payload)
@@ -268,18 +308,18 @@ class SQLiFuzzer:
                     # Check for SQL Error
                     isErr, indicator = detectSQLError(body)
 
-                    if isErr:
+                    if isErr or (status != baseStatus and status >= 400):
                         pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                        resultsKey = (pageKey, indicator or "N/A", "potential")
+                        resultsKey = (pageKey, (indicator or "status_code_change"), "potential")
 
                         with self.lock:
                             if resultsKey not in self.vulnerableForms:
                                 self.vulnerableForms[resultsKey] = {
                                     "url": pageKey,
                                     "payload": payload,
-                                    "payload_samples": [raw] if raw else [],
+                                    "payload_samples": [payload],
                                     "status_code": status,
-                                    "indicator": indicator or "N/A",
+                                    "indicator": indicator or "status_code_change",
                                     "snippet": (body or "")[:200],
                                     "count": 1,
                                     "type": "potential",
@@ -288,8 +328,8 @@ class SQLiFuzzer:
                             else:
                                 entry = self.vulnerableForms[resultsKey]
                                 entry["count"] += 1
-                                if raw and len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                    entry["payload_samples"].append(raw)
+                                if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                    entry["payload_samples"].append(payload)
                         continue
 
                     # Check for blind SQLi
@@ -331,8 +371,8 @@ class SQLiFuzzer:
                                 if resultsKey not in self.vulnerableForms:
                                     self.vulnerableForms[resultsKey] = {
                                         "url": pageKey,
-                                        "payload":raw,
-                                        "payload_samples": [raw] if raw else [],
+                                        "payload": payload,
+                                        "payload_samples": [payload],
                                         "status_code": status,
                                         "indicator": ind,
                                         "snippet": (body or "")[:200],
@@ -343,8 +383,8 @@ class SQLiFuzzer:
                                 else:
                                     entry = self.vulnerableForms[resultsKey]
                                     entry["count"] += 1
-                                    if raw and len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                        entry["payload_samples"].append(raw)
+                                    if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                        entry["payload_samples"].append(payload)
 
                         continue
 
@@ -359,8 +399,8 @@ class SQLiFuzzer:
                                 if resultsKey not in self.vulnerableForms:
                                     self.vulnerableForms[resultsKey] = {
                                         "url": pageKey,
-                                        "payload": raw,
-                                        "payload_samples": [raw] if raw else [],
+                                        "payload": payload,
+                                        "payload_samples": [payload],
                                         "status_code": status,
                                         "indicator": "detected_sql_content",
                                         "snippet": (body or "")[:200],
@@ -371,6 +411,6 @@ class SQLiFuzzer:
                                 else:
                                     entry = self.vulnerableForms[resultsKey]
                                     entry["count"] += 1
-                                    if raw and len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                        entry["payload_samples"].append(raw)
+                                    if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                        entry["payload_samples"].append(payload)
         return list(self.vulnerableForms.values())

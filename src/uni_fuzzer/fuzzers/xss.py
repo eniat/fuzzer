@@ -265,18 +265,49 @@ class XSSFuzzer:
         baseNoQuery = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
         originalQuery = parsed.query
 
+        # Prebuilding to remove multiple canary and quote calls
+        prebuiltPayloads = []
+        seen = set()
+
+        for raw in self.payloads:
+            if raw in seen:
+                continue
+
+            seen.add(raw)
+            marked = canary(raw, self.token)
+            enc = quote(marked, safe="")
+            prebuiltPayloads.append((raw, marked, enc))
+
+        # Singular probe to check if reflective
+        probe = f"xssprobe-{self.token}"
+        probeQuery = originalQuery.replace("FUZZ", quote(probe, safe=""))
+        probeUrl = f"{baseNoQuery}?{probeQuery}"
+
+        try:
+            res = self.session.get(
+                probeUrl,
+                headers=self.headers,
+                timeout=cfg["http"]["timeout_get_seconds"],
+                allow_redirects=False
+            )
+            body = res.text or ""
+
+            if probe.lower() not in body.lower() and unescape(body).lower().find(probe.lower()) == -1:
+                return []
+
+        except Exception:
+            return []
+
         tasks = []
         results = {}
 
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
-            for payload in self.payloads:
+            for raw, marked, enc in prebuiltPayloads:
                 # Replace FUZZ with the payload, uniquely mark it, encode it for URL injection
-                markedPayload = canary(payload, self.token)
-                encoded = quote(markedPayload, safe="")
-                fuzzedQuery = originalQuery.replace("FUZZ", encoded)
+                fuzzedQuery = originalQuery.replace("FUZZ", enc)
                 fullUrl = f"{baseNoQuery}?{fuzzedQuery}"
 
-                tasks.append(executor.submit(self.sendRequest, fullUrl,payload=payload, markedPayload=markedPayload))
+                tasks.append(executor.submit(self.sendRequest, fullUrl,payload=raw, markedPayload=marked))
 
             # Collect results as requests complete
             for future in as_completed(tasks):
@@ -321,6 +352,7 @@ class XSSFuzzer:
         """
         results = {}
 
+        # Prebuilding to remove multiple canary and quote calls
         prebuiltPayloads = []
         seen = set()
 
@@ -355,6 +387,7 @@ class XSSFuzzer:
                 if not fuzzField:
                     continue
 
+                # Singular probe to check if reflective
                 if not probeReflexivity(self.session, url, method, fields, fuzzField, self.headers, self.token):
                     continue
 
@@ -431,6 +464,19 @@ class XSSFuzzer:
         results = {}
         pages = set()
 
+        # Prebuilding to remove multiple canary and quote calls
+        prebuiltPayloads = []
+        seen = set()
+
+        for raw in self.payloads:
+            if raw in seen:
+                continue
+
+            seen.add(raw)
+            marked = canary(raw, self.token)
+            enc = quote(marked, safe="")
+            prebuiltPayloads.append((raw, marked, enc))
+
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             for form in forms:
                 tasks = []
@@ -451,8 +497,7 @@ class XSSFuzzer:
                 # Track the form to potentially revisit
                 pages.add(url)
 
-                for raw in self.payloads:
-                    marked = canary(raw,self.token)
+                for raw, marked, enc in prebuiltPayloads:
 
                     if method == "POST":
                         # POST form fuzzing
@@ -477,7 +522,7 @@ class XSSFuzzer:
 
                         for field in fields:
                             if isFuzzableField(field):
-                                params.append(f"{field}={quote(marked, safe='')}")
+                                params.append(f"{field}={enc}")
 
                             else:
                                 params.append(f"{field}=test")
@@ -703,6 +748,7 @@ class XSSFuzzer:
                 if pageKey in seen:
                     # Skip already tested pages
                     continue
+                seen.add(pageKey)
 
                 urlCheck = finUrl
 
