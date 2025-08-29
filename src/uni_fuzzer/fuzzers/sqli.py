@@ -18,6 +18,11 @@ TIMING_THRESHOLD_MS = cfg["sqli"]["timing_threshold_ms"]
 BLIND_MARKERS = cfg["sqli"]["blind_markers"]
 BLIND_FACTOR  = cfg["sqli"]["blind_timing_factor"]
 BLIND_TIME = cfg["sqli"]["blind_time"]
+BOOLEAN_TRUE  = cfg["sqli"]["boolean_true"]
+BOOLEAN_FALSE = cfg["sqli"]["boolean_false"]
+BOOLEAN_WRAPPERS = cfg["sqli"]["boolean_wrappers"]
+BOOLEAN_SUCCESS_KEYWORDS = cfg["sqli"]["boolean_success_keywords"]
+BOOLEAN_FAILURE_KEYWORDS = cfg["sqli"]["boolean_failure_keywords"]
 
 AUTO_SUBMIT_KEYS = cfg["sqli"]["auto_submit_keys"]
 
@@ -40,6 +45,19 @@ def isBlindPayload (payload):
     low = (payload or "").lower()
     return any(mark in low for mark in BLIND_MARKERS) and bool(re.search(r"\d", low))
 
+def buildBooleanPayloads():
+    """
+        Builds boolean tue/false payload pairs for blind sqli boolean tests
+    """
+    payloadPairs = []
+    for wrap in BOOLEAN_WRAPPERS:
+        for true, false in zip(BOOLEAN_TRUE, BOOLEAN_FALSE):
+            payloadPairs.append((
+                wrap.format(cond=true),
+                wrap.format(cond=false)
+            ))
+    return payloadPairs
+
 def autoSubmits(html, params):
     """
         If there is a button summits it with the name as the field
@@ -57,12 +75,9 @@ def detectSQLiBlind(baseMs, testMs, thresholdMs= TIMING_THRESHOLD_MS, factor=BLI
     """
         Detects SQLi blind by checking timing difference
     """
-    delta = testMs - baseMs
-    if delta <= 0:
+    if testMs <= 0 or baseMs <= 0:
         return False
-    baseline = max(baseMs, 200.0)
-
-    return (delta >= thresholdMs) or (testMs >= baseline * factor)
+    return (testMs >= baseMs * factor) and ((testMs - baseMs) >= thresholdMs)
 
 def expandTimeToken(payload, seconds=BLIND_TIME):
     """
@@ -70,12 +85,25 @@ def expandTimeToken(payload, seconds=BLIND_TIME):
     """
     return (payload or "").replace("__TIME__", str(seconds))
 
-def detectSQLiContent(baseHtml, html):
+def detectSQLiDiff(baseHtml, html, isNotSQLIBlind=True):
     """
-        Detect SQLi content by comparing the basehtml with the html after and assessing differences
+        Detect SQLi content by comparing the basehtml with the html after and assessing differences/
+        Detect blind SQLi by checking two word lists
     """
     b = (baseHtml or "").lower()
     h = (html or "").lower()
+
+    if not isNotSQLIBlind:
+        hasSuccB = any(s in b for s in BOOLEAN_SUCCESS_KEYWORDS)
+        hasFailB = any(f in b for f in BOOLEAN_FAILURE_KEYWORDS)
+        hasSuccH = any(s in h for s in BOOLEAN_SUCCESS_KEYWORDS)
+        hasFailH = any(f in h for f in BOOLEAN_FAILURE_KEYWORDS)
+
+        # True page shows success whilst other shows fail or opposite
+        if (hasSuccB and hasFailH) or (hasFailB and hasSuccH):
+            return True
+
+        return False
 
     if re.search(r"user id (exists|is missing) in the database", h, flags=re.I) \
             and not re.search(r"user id (exists|is missing) in the database", b, flags=re.I):
@@ -248,7 +276,7 @@ class SQLiFuzzer:
                     url = f"{parsed.scheme}://{parsed.netloc}{url}"
 
                 # Get a baseline for later comparisons
-                baseText, baseStatus, baselineMs = self.getBaseline(url, method, fields)
+                baseText, baseStatus, _ = self.getBaseline(url, method, fields)
 
                 for raw in self.payloads:
                     payload = expandTimeToken(raw)
@@ -332,65 +360,9 @@ class SQLiFuzzer:
                                     entry["payload_samples"].append(payload)
                         continue
 
-                    # Check for blind SQLi
-                    if isBlindPayload(payload):
-                        testMs = res.elapsed.total_seconds() * 1000.0
-
-                        if detectSQLiBlind(baselineMs, testMs):
-                            try:
-                                if res.request.method.upper() == "POST":
-                                    confirm = self.session.post(
-                                        res.request.url,
-                                        data=res.request.body if res.request.body else {},
-                                        headers=self.headers,
-                                        timeout=cfg["sqli"]["timeout_blind"],
-                                        allow_redirects=cfg["http"]["redirects"]["fuzz_post"],
-                                    )
-
-                                else:
-                                    confirm = self.session.get(
-                                        res.request.url,
-                                        headers=self.headers,
-                                        timeout=cfg["sqli"]["timeout_blind"],
-                                        allow_redirects=cfg["http"]["redirects"]["fuzz_get"],
-                                    )
-
-                                confirmMs = confirm.elapsed.total_seconds() * 1000.0
-
-                                if not detectSQLiBlind(baselineMs, confirmMs):
-                                    continue
-
-                            except Exception:
-                                continue
-
-                            pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                            ind = "blind_sql"
-                            resultsKey = (pageKey, ind, "vulnerable")
-
-                            with self.lock:
-                                if resultsKey not in self.vulnerableForms:
-                                    self.vulnerableForms[resultsKey] = {
-                                        "url": pageKey,
-                                        "payload": payload,
-                                        "payload_samples": [payload],
-                                        "status_code": status,
-                                        "indicator": ind,
-                                        "snippet": (body or "")[:200],
-                                        "count": 1,
-                                        "type": "vulnerable",
-                                    }
-
-                                else:
-                                    entry = self.vulnerableForms[resultsKey]
-                                    entry["count"] += 1
-                                    if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                        entry["payload_samples"].append(payload)
-
-                        continue
-
                     # Check for valid SQLi ran code
                     if baseStatus:
-                        if status != baseStatus or detectSQLiContent(baseText, body):
+                        if status != baseStatus or detectSQLiDiff(baseText, body):
 
                             pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
                             resultsKey = (pageKey, "detected_sql_content", "vulnerable")
@@ -414,3 +386,228 @@ class SQLiFuzzer:
                                     if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                                         entry["payload_samples"].append(payload)
         return list(self.vulnerableForms.values())
+
+    def SQLiBlindFuzz(self, forms):
+        """
+            Takes the forms retrieved by the crawler and fuzzes them for SQLi blind vulnerabilities
+        """
+
+        # Build boolean true/False pairs
+        boolPairs = buildBooleanPayloads()
+
+        with (ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor):
+            for form in forms:
+                tasks = []
+                # To track future information for saving
+                ctx = {}
+
+                url = form.get("url")
+                method = (form.get("method") or "POST").upper()
+                fields = form.get("formFields") or []
+
+                # Skip invalid form objects
+                if not url or not fields:
+                    continue
+
+                # Normalize Urls
+                parsed = urlparse(self.baseUrl)
+
+                if not url.startswith("http"):
+                    url = f"{parsed.scheme}://{parsed.netloc}{url}"
+
+                # Get a baseline for later comparisons
+                baseText, baseStatus, baselineMs = self.getBaseline(url, method, fields)
+
+                for raw in self.payloads:
+                    if not isBlindPayload(raw):
+                        continue
+
+                    payload = expandTimeToken(raw)
+                    if method == "POST":
+                        # POST form fuzzing
+                        data = {}
+
+                        for field in fields:
+                            # Inject payload into fuzzable fields
+                            if isFuzzableField(field):
+                                data[field] = payload
+
+                            else:
+                                data[field] = "test"
+
+                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
+
+                        tasks.append(fut)
+                        ctx[fut] = ("timing", url, payload, None)
+
+                    else:
+                        # GET form fuzzing
+                        params = {}
+                        for field in fields:
+                            if isFuzzableField(field):
+                                params[field] = payload
+
+                            else:
+                                params[field] = "test"
+
+                        params = autoSubmits(baseText, params)
+
+                        # Contruct GET requests
+                        logParams = [f"{k}={quote(str(v), safe='')}" for k, v in params.items()]
+                        separator = "&" if "?" in url else "?"
+                        fullUrl = f"{url}{separator}{'&'.join(logParams)}"
+
+                        fut = executor.submit(self.session.get, url, params =params, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
+
+                        tasks.append(fut)
+                        ctx[fut] = ("timing", fullUrl, payload, None)
+
+
+                for trueCond, falseCond in boolPairs:
+                    pairId = f"{trueCond}|||{falseCond}"
+                    if method == "POST":
+                        # POST form fuzzing
+                        dataTrue = {}
+                        dataFalse = {}
+
+                        for field in fields:
+                            # Inject into fuzzable fields the 1 plus a true condition and a false condition
+                            if isFuzzableField(field):
+                                dataTrue[field] = "1" + trueCond
+                                dataFalse[field] = "1" + falseCond
+
+                            else:
+                                dataTrue[field] = "1"
+                                dataFalse[field] = "1"
+
+                        futTrue = executor.submit( self.session.post, url, data=dataTrue, headers=self.headers,timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
+                        futFalse = executor.submit(self.session.post, url, data=dataFalse, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
+
+                        tasks.extend([futTrue, futFalse])
+
+                        ctx[futTrue] = ("bool_true", url, trueCond, pairId)
+                        ctx[futFalse] = ("bool_false", url, falseCond, pairId)
+
+                    else:
+                        # GET form fuzzing
+                        paramsTrue ={}
+                        paramsFalse = {}
+
+                        for field in fields:
+                            # Inject into fuzzable fields the 1 plus a true condition and a false condition
+                            if isFuzzableField(field):
+                                paramsTrue[field] = "1" + trueCond
+                                paramsFalse[field] = "1" + falseCond
+
+                            else:
+                                paramsTrue[field] = "1"
+                                paramsFalse[field] = "1"
+
+                        paramsTrue = autoSubmits(baseText, paramsTrue)
+                        paramsFalse = autoSubmits(baseText, paramsFalse)
+
+                        # Contruct GET requests
+                        logParamsT = [f"{k}={quote(str(v), safe='')}" for k, v in paramsTrue.items()]
+                        logParamsF = [f"{k}={quote(str(v), safe='')}" for k, v in paramsFalse.items()]
+
+                        seperator = "&" if "?" in url else "?"
+
+                        fullUrlT = f"{url}{seperator}{'&'.join(logParamsT)}"
+                        fullUrlF = f"{url}{seperator}{'&'.join(logParamsF)}"
+
+                        futTrue = executor.submit(self.session.get, url, params=paramsTrue, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
+                        futFalse = executor.submit(self.session.get, url, params=paramsFalse, headers=self.headers,timeout=cfg["sqli"]["timeout_blind"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
+
+                        tasks.extend([futTrue, futFalse])
+
+                        ctx[futTrue] = ("bool_true", fullUrlT, trueCond, pairId)
+                        ctx[futFalse] = ("bool_false", fullUrlF, falseCond, pairId)
+
+                precheckBools = {}
+
+                for fut in as_completed(tasks):
+                    kind, finUrl, condStr, pid = ctx[fut]
+
+                    try:
+                        res = fut.result()
+                    except Exception:
+                        continue
+
+                    body = res.text or ""
+                    status = res.status_code
+
+                    # Check for blind SQLi
+                    if kind == "timing":
+                        testMs = res.elapsed.total_seconds() * 1000.0
+
+                        if detectSQLiBlind(baselineMs, testMs):
+
+                            pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+                            ind = "blind_sql_timing"
+                            resultsKey = (pageKey, ind, "vulnerable")
+
+                            with self.lock:
+                                if resultsKey not in self.vulnerableForms:
+                                    self.vulnerableForms[resultsKey] = {
+                                        "url": pageKey,
+                                        "payload": condStr,
+                                        "payload_samples": [condStr],
+                                        "status_code": status,
+                                        "indicator": ind,
+                                        "snippet": (body or "")[:200],
+                                        "count": 1,
+                                        "type": "vulnerable",
+                                    }
+
+                                else:
+                                    entry = self.vulnerableForms[resultsKey]
+                                    entry["count"] += 1
+                                    if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                        entry["payload_samples"].append(condStr)
+
+                        continue
+
+                    # Store bools then check when we have both
+                    if kind in ("bool_true", "bool_false"):
+                        key = ("GET" if method == "GET" else "POST", url, tuple(sorted(fields)), pid)
+
+                        if key not in precheckBools:
+                            precheckBools[key] = {}
+
+                        precheckBools[key][kind] = {
+                            "body": body,
+                            "status": status,
+                            "url": finUrl,
+                            "cond": condStr
+                        }
+
+                for key, parts in precheckBools.items():
+                    if "bool_true" in parts and "bool_false" in parts:
+                        true, false = parts["bool_true"], parts["bool_false"]
+
+                        if detectSQLiDiff(true["body"], false["body"], isNotSQLIBlind= False):
+
+                            pageKey = (true["url"] or url).split("?", 1)[0].split("#", 1)[0]
+                            resultsKey = (pageKey, "blind_sql_boolean", "vulnerable")
+                            payloadUsed = f'TRUE:{true["cond"]} | FALSE:{false["cond"]}'
+
+                            with self.lock:
+                                if resultsKey not in self.vulnerableForms:
+                                    self.vulnerableForms[resultsKey] = {
+                                        "url": pageKey,
+                                        "payload": payloadUsed,
+                                        "payload_samples": [payloadUsed],
+                                        "status_code": true["status"],
+                                        "indicator": "blind_sql_boolean",
+                                        "snippet": (true["body"] or "")[:200],
+                                        "count": 1,
+                                        "type": "vulnerable",
+                                    }
+
+                                else:
+                                    entry = self.vulnerableForms[resultsKey]
+                                    entry["count"] += 1
+                                    if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                        entry["payload_samples"].append(payloadUsed)
+
+            return list(self.vulnerableForms.values())

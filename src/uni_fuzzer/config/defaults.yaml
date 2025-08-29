@@ -21,6 +21,24 @@ crawler:
   rate_limit_default: 0.0
   headless_default: true
   output_to_file_default: false
+  junk_keywords:
+    - "mat-"
+    - "mdc-"
+    - "cdk-"
+    - "ng-"
+    - "slider"
+    - "toggle"
+    - "checkbox"
+    - "submit"
+    - "reset"
+    - "button"
+    - "unnamed"
+    - "go to file"
+    - "input:"
+    - "user_token"
+    - "max_file_size"
+    - "upload"
+    - "change"
 
 fuzz:
   max_depth_default: 3
@@ -120,9 +138,9 @@ sqli:
     - "waitfor delay"
     - "pg_sleep("
   max_samples_per_group: 3
-  timing_threshold_ms: 2000
-  blind_timing_factor: 2.0
-  blind_time: 5
+  timing_threshold_ms: 2500
+  blind_timing_factor: 2.8
+  blind_time: 6
   timeout_blind: 12
   auto_submit_keys:
     - "submit"
@@ -131,6 +149,32 @@ sqli:
     - "search"
     - "btnsign"
     - "btnclear"
+  boolean_true:
+    - "1=1"
+    - "2>1"
+  boolean_false:
+    - "1=2"
+    - "2>3"
+  boolean_wrappers:
+    - " AND ({cond})-- "
+    - "' AND ({cond})-- "
+    - "') AND ({cond})-- "
+    - ") AND ({cond})-- "
+  boolean_success_keywords:
+    - "exists"
+    - "found"
+    - "valid"
+    - "success"
+    - "match"
+    - "logged in"
+    - "welcome"
+  boolean_failure_keywords:
+    - "missing"
+    - "not found"
+    - "invalid"
+    - "no results"
+    - "failed"
+    - "does not exist"
 
 paths:
   file_extensions:

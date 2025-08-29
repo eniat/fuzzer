@@ -111,7 +111,8 @@ def run(args):
             and not args.xss_forms
             and not args.xss_stored
             and not args.xss_dom
-            and not args.fuzz_sqli):
+            and not args.fuzz_sqli
+            and not args.fuzz_sqli_b):
 
         crawler = Crawler(
             mode=args.crawler_mode,
@@ -133,7 +134,7 @@ def run(args):
 
     else:
 
-        if (not args.wordlist) and (args.fuzz_paths or args.fuzz_params or args.xss_params or args.xss_forms or args.xss_stored or args.fuzz_sqli):
+        if (not args.wordlist) and (args.fuzz_paths or args.fuzz_params or args.xss_params or args.xss_forms or args.xss_stored or args.fuzz_sqli or args.fuzz_sqli_b):
             print("The Fuzzer requires a --wordlist to run for the selected mode")
             return
 
@@ -393,9 +394,34 @@ def run(args):
                         if args.report_all:
                             results.extend([v for v in res if v.get("type") == "sqli_potential"])
 
+                if args.fuzz_sqli_b:
+
+                    print(f"[Thread] SQLi Form Fuzzing: {fullUrl}")
+                    fuzzer = SQLiFuzzer(
+                        baseUrl=args.start_url,
+                        useCrawler=False,
+                        wordlistPath=args.wordlist,
+                        outputToFile=args.output_to_file,
+                        isSilent=True,
+                        session=sharedSession,
+                        auth=args.auth,
+                        loginUsername=args.username,
+                        loginPassword=args.password,
+                        loginPath=args.login_path
+                    )
+
+                    res = fuzzer.SQLiBlindFuzz([form])
+
+                    if res:
+                        for vuln in res:
+                            if vuln.get("indicator") in ("blind_sql_timing", "blind_sql_boolean"):
+                                vuln["type"] = "sqli_blind"
+
+                        results.extend([v for v in res if v.get("type") == "sqli_blind"])
+
                 return results
 
-            if args.fuzz_paths or args.fuzz_params or args.xss_params or args.fuzz_sqli:
+            if args.fuzz_paths or args.fuzz_params or args.xss_params:
                 print(f"\n[+] Starting threaded fuzzing on discovered endpoints... \n")
                 with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
                     # Run fuzzer using threads across all endpoints
@@ -405,7 +431,7 @@ def run(args):
                         results = future.result()
                         allVulnerabilities.extend(results)
 
-            if args.xss_forms or args.xss_stored or args.fuzz_sqli:
+            if args.xss_forms or args.xss_stored or args.fuzz_sqli or args.fuzz_sqli_b:
                 print(f"\n[+] Starting threaded fuzzing on discovered Forms... \n")
                 with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
                     # Run fuzzer using threads across all forms

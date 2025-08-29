@@ -46,13 +46,7 @@ def extractIdentifier(el):
 
     normalized = raw.lower()
 
-    junkKeywords = [
-        "mat-", "mdc-", "cdk-", "ng-",
-        "slider", "toggle", "checkbox",
-        "submit", "reset", "button",
-        "unnamed", "go to file", "input:",
-        "user_token", "max_file_size", "upload", "change"
-    ]
+    junkKeywords = cfg["crawler"]["junk_keywords"]
 
     if any(junk in normalized for junk in junkKeywords):
         return None

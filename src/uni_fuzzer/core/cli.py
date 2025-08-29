@@ -18,6 +18,7 @@ def buildParser():
     parser.add_argument("--xss-stored", action="store_true",help="Enable stored XSS fuzzing. (requires crawler to be used)")
     parser.add_argument("--xss-dom", action="store_true",help="Enable dom XSS fuzzing. (requires crawler and doesn't use wordlist")
     parser.add_argument("--fuzz-sqli", action="store_true",help="Enable SQL injection fuzzing. (requires crawler to be used)")
+    parser.add_argument("--fuzz-sqli-b", action="store_true", help="Enable SQL Blind injection fuzzing. (requires crawler to be used)")
     parser.add_argument("--wordlist", type=str, help="Path to payload wordlist for fuzzing")
     parser.add_argument("--output-to-file", action="store_true", help="Save output to a file")
     parser.add_argument("--llm", type =str, help="Natural language prompt to filter the wordlist using local ML")
