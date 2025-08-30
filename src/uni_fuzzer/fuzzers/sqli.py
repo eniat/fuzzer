@@ -8,7 +8,7 @@ from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import login
 
-from uni_fuzzer.core.utility import get_cfg, isFuzzableField
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist
 cfg = get_cfg()
 
 SQL = cfg["sqli"]["error_signatures"]
@@ -148,7 +148,7 @@ class SQLiFuzzer:
         self.loginPath = loginPath
         self.auth = auth
 
-        self.payloads = self.loadWordlist() if self.wordlistPath is not None else []
+        self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
 
         self.headers = {"User-Agent": cfg["http"]["user_agent"],}
         if cfg["http"]["add_referer"]:
@@ -161,22 +161,6 @@ class SQLiFuzzer:
             ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
             if not ok:
                 print("[-] HTTP login in SQLi Fuzzer failed")
-
-    def loadWordlist(self):
-        """
-            Load payload from wordlist
-        """
-        # Check if list is passed
-        if isinstance(self.wordlistPath, list):
-            return self.wordlistPath
-
-        try:
-            with open(self.wordlistPath, 'r', encoding='utf-8', errors='ignore') as f:
-                # Strips the lines
-                return [line.strip() for line in f if line.strip()]
-        except Exception as e:
-            # On error raise exception
-            raise RuntimeError(f"[-] Failed to load wordlist from {self.wordlistPath}: {e}")
 
     def getBaseline(self, endpoint, method, fields):
         """

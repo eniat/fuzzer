@@ -10,7 +10,7 @@ from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import login
 
-from uni_fuzzer.core.utility import get_cfg
+from uni_fuzzer.core.utility import get_cfg, loadWordlist
 cfg = get_cfg()
 
 MAX_SAMPLES_PER_GROUP = cfg["path_traversal"]["max_samples_per_group"]
@@ -22,7 +22,7 @@ class PathFuzzer:
         self.wordlistPath = wordlistPath
         self.outputToFile = outputToFile
         self.maxDepth =  maxDepth if maxDepth is not None else cfg["fuzz"]["max_depth_default"]
-        self.payloads = self.loadWordlist()
+        self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.isSilent = isSilent
 
         # Authentication
@@ -62,22 +62,6 @@ class PathFuzzer:
 
         self.baseline = self.getBaseline()
 
-
-    def loadWordlist(self):
-        """
-            Load payload from wordlist
-        """
-        # Check if list is passed
-        if isinstance(self.wordlistPath, list):
-            return self.wordlistPath
-
-        try:
-            with open(self.wordlistPath, 'r', encoding='utf-8', errors='replace') as f:
-                # Strips the lines
-                return [line.strip() for line in f if line.strip()]
-        except Exception as e :
-            # On error raise exception
-            raise RuntimeError( f"[-] Failed to load wordlist from {self.wordlistPath}: {e}")
 
     def isPathTraversalSuccess(self, response, url):
         """

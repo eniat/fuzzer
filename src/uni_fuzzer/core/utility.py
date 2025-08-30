@@ -25,3 +25,19 @@ def isFuzzableField(field):
     skips = cfg["fuzz"]["skipped_fields"]
 
     return not any(skip in lowered for skip in skips)
+
+def loadWordlist(path):
+    """
+        Load payload from wordlist
+    """
+    # Check if list is passed via LLM
+    if isinstance(path, list):
+        return path
+
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            # Strips the lines
+            return [line.strip() for line in f if line.strip()]
+    except Exception as e:
+        # On error raise exception
+        raise RuntimeError(f"[-] Failed to load wordlist from {path}: {e}")

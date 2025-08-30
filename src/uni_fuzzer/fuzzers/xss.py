@@ -13,7 +13,7 @@ from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import seleniumLogin, login
 
-from uni_fuzzer.core.utility import get_cfg, isFuzzableField
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist
 cfg = get_cfg()
 
 # Regex templates for XSS injections
@@ -146,7 +146,7 @@ class XSSFuzzer:
         self.useCrawler = useCrawler
         self.wordlistPath = wordlistPath
         self.outputToFile = outputToFile
-        self.payloads = self.loadWordlist() if self.wordlistPath is not None else []
+        self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.isSilent = isSilent
         self.token = f"XSSCanary-{uuid4().hex[:8]}"
         self.headless = headless
@@ -187,22 +187,6 @@ class XSSFuzzer:
             if not ok:
                 print("[-] HTTP login in XSSFuzzer failed")
 
-
-    def loadWordlist(self):
-        """
-            Load payload from wordlist
-        """
-        # Check if list is passed
-        if isinstance(self.wordlistPath, list):
-            return self.wordlistPath
-
-        try:
-            with open(self.wordlistPath, 'r', encoding='utf-8', errors='replace') as f:
-                # Strips the lines
-                return [line.strip() for line in f if line.strip()]
-        except Exception as e:
-            # On error raise exception
-            raise RuntimeError(f"[-] Failed to load wordlist from {self.wordlistPath}: {e}")
 
     def sendRequest(self, url, payload=None, markedPayload= None, method="GET", data=None):
         """
