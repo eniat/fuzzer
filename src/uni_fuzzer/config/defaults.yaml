@@ -137,11 +137,16 @@ sqli:
     - "benchmark("
     - "waitfor delay"
     - "pg_sleep("
+    - "dbms_lock.sleep"
+    - "dbms_pipe.receive_message"
   max_samples_per_group: 3
   timing_threshold_ms: 2500
-  blind_timing_factor: 2.8
+  blind_timing_factor: 2.2
   blind_time: 6
-  timeout_blind: 12
+  timeout_blind: 30
+  timing_baseline_probes: 5
+  timing_payload_trials: 2
+  timing_confirm_probes: 1
   auto_submit_keys:
     - "submit"
     - "btn"
@@ -196,6 +201,6 @@ auth:
     long: 10
 
   selectors:
-    username_field: "username"
+    username_field: "login"
     password_field: "password"
-    submit_name: "Login"
+    submit_name: "form"

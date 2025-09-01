@@ -162,6 +162,15 @@ def run(args):
             endpoints, forms = crawler.crawl(args.start_url)
             sharedSession = getattr(crawler, "session", None)
 
+            # ADDED FOR TESTING SQLI BLING TIMING REMOVE AFTTER
+            # ------------------------------------------------------------------
+            forms.append({
+                "url": f"{args.start_url}/sqli_15.php",
+                "method": "POST",
+                "formFields": ["title"],
+            })
+            # ------------------------------------------------------------------
+
             crawlerPrint(endpoints, forms, output_to_file=args.output_to_file, filename="CrawlerOutput.txt")
 
             rawDomForms = forms[:]

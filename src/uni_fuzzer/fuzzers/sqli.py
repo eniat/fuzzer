@@ -3,7 +3,6 @@ import threading
 import re
 from urllib.parse import urlparse, quote, urlencode
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import login
@@ -23,6 +22,9 @@ BOOLEAN_FALSE = cfg["sqli"]["boolean_false"]
 BOOLEAN_WRAPPERS = cfg["sqli"]["boolean_wrappers"]
 BOOLEAN_SUCCESS_KEYWORDS = cfg["sqli"]["boolean_success_keywords"]
 BOOLEAN_FAILURE_KEYWORDS = cfg["sqli"]["boolean_failure_keywords"]
+TIMING_BASELINE_PROBES = cfg["sqli"]["timing_baseline_probes"]
+TIMING_PAYLOAD_TRIALS  = cfg["sqli"]["timing_payload_trials"]
+TIMING_CONFIRM_PROBES  = cfg["sqli"]["timing_confirm_probes"]
 
 AUTO_SUBMIT_KEYS = cfg["sqli"]["auto_submit_keys"]
 
@@ -43,7 +45,7 @@ def isBlindPayload (payload):
         Checks if payload is a blind payload
     """
     low = (payload or "").lower()
-    return any(mark in low for mark in BLIND_MARKERS) and bool(re.search(r"\d", low))
+    return any(mark in low for mark in BLIND_MARKERS)
 
 def buildBooleanPayloads():
     """
@@ -167,8 +169,6 @@ class SQLiFuzzer:
             Get baseline to compare if SQLi worked
         """
         try:
-            elapses = []
-
             if method == "POST":
                 baseData = {f: "1" for f in fields}
 
@@ -181,18 +181,6 @@ class SQLiFuzzer:
                 )
 
                 baseText, baseStatus = res.text or "", res.status_code
-
-                data = {f: "1" for f in fields}
-
-                for _ in range(3):
-                    r = self.session.post(
-                        endpoint,
-                        data=data,
-                        headers=self.headers,
-                        timeout=cfg["sqli"]["timeout_blind"],
-                        allow_redirects=cfg["http"]["redirects"]["baseline_post"]
-                    )
-                    elapses.append(r.elapsed.total_seconds() * 1000.0)
 
             else:
                 res = self.session.get(
@@ -217,22 +205,64 @@ class SQLiFuzzer:
 
                 baseText, baseStatus = res.text or "", res.status_code
 
-                for _ in range(3):
-                    r = self.session.get(
+            return baseText, baseStatus
+
+        except Exception:
+            return "",0
+
+    def getBlindBaseline(self, endpoint, method, fields, probes=TIMING_BASELINE_PROBES):
+        """
+            Get time baseline for blind SQLi timing
+        """
+        try:
+            elapses = []
+
+            if method == "POST":
+                baseData = {f: "1" for f in fields}
+
+                for _ in range(max(1, int(probes))):
+                    res = self.session.post(
+                        endpoint,
+                        data=baseData,
+                        headers=self.headers,
+                        timeout=cfg["sqli"]["timeout_blind"],
+                        allow_redirects=cfg["http"]["redirects"]["baseline_post"]
+                    )
+                    elapses.append(res.elapsed.total_seconds() * 1000.0)
+
+
+            else:
+                res = self.session.get(
+                    endpoint,
+                    headers=self.headers,
+                    timeout=cfg["sqli"]["timeout_blind"],
+                    allow_redirects=cfg["http"]["redirects"]["baseline_get"]
+                )
+
+                html = res.text or ""
+
+                params = {f: "1" for f in fields}
+                params = autoSubmits(html, params)
+
+                for _ in range(max(1, int(probes))):
+                    res = self.session.get(
                         endpoint,
                         params=params,
                         headers=self.headers,
                         timeout=cfg["sqli"]["timeout_blind"],
                         allow_redirects=cfg["http"]["redirects"]["baseline_get"]
                     )
-                    elapses.append(r.elapsed.total_seconds() * 1000.0)
+                    elapses.append(res.elapsed.total_seconds() * 1000.0)
+
+            if not elapses:
+                return 0.0
 
             elapses.sort()
-            baselineMs = elapses[1] if len(elapses) >= 3 else (elapses[0] if elapses else 0.0)
-            return baseText, baseStatus, baselineMs
+            mid = len(elapses) //2
+            return elapses[mid] if len(elapses) %2 == 1 else (elapses[mid - 1] + elapses[mid]) /2.0
 
         except Exception:
-            return "",0,0.0
+            return 0.0
 
     def SQLiFuzz(self, forms):
         """
@@ -260,7 +290,7 @@ class SQLiFuzzer:
                     url = f"{parsed.scheme}://{parsed.netloc}{url}"
 
                 # Get a baseline for later comparisons
-                baseText, baseStatus, _ = self.getBaseline(url, method, fields)
+                baseText, baseStatus = self.getBaseline(url, method, fields)
 
                 for raw in self.payloads:
                     payload = expandTimeToken(raw)
@@ -400,52 +430,7 @@ class SQLiFuzzer:
                     url = f"{parsed.scheme}://{parsed.netloc}{url}"
 
                 # Get a baseline for later comparisons
-                baseText, baseStatus, baselineMs = self.getBaseline(url, method, fields)
-
-                for raw in self.payloads:
-                    if not isBlindPayload(raw):
-                        continue
-
-                    payload = expandTimeToken(raw)
-                    if method == "POST":
-                        # POST form fuzzing
-                        data = {}
-
-                        for field in fields:
-                            # Inject payload into fuzzable fields
-                            if isFuzzableField(field):
-                                data[field] = payload
-
-                            else:
-                                data[field] = "test"
-
-                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
-
-                        tasks.append(fut)
-                        ctx[fut] = ("timing", url, payload, None)
-
-                    else:
-                        # GET form fuzzing
-                        params = {}
-                        for field in fields:
-                            if isFuzzableField(field):
-                                params[field] = payload
-
-                            else:
-                                params[field] = "test"
-
-                        params = autoSubmits(baseText, params)
-
-                        # Contruct GET requests
-                        logParams = [f"{k}={quote(str(v), safe='')}" for k, v in params.items()]
-                        separator = "&" if "?" in url else "?"
-                        fullUrl = f"{url}{separator}{'&'.join(logParams)}"
-
-                        fut = executor.submit(self.session.get, url, params =params, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
-
-                        tasks.append(fut)
-                        ctx[fut] = ("timing", fullUrl, payload, None)
-
+                baseText, baseStatus = self.getBaseline(url, method, fields)
 
                 for trueCond, falseCond in boolPairs:
                     pairId = f"{trueCond}|||{falseCond}"
@@ -520,37 +505,6 @@ class SQLiFuzzer:
                     body = res.text or ""
                     status = res.status_code
 
-                    # Check for blind SQLi
-                    if kind == "timing":
-                        testMs = res.elapsed.total_seconds() * 1000.0
-
-                        if detectSQLiBlind(baselineMs, testMs):
-
-                            pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                            ind = "blind_sql_timing"
-                            resultsKey = (pageKey, ind, "vulnerable")
-
-                            with self.lock:
-                                if resultsKey not in self.vulnerableForms:
-                                    self.vulnerableForms[resultsKey] = {
-                                        "url": pageKey,
-                                        "payload": condStr,
-                                        "payload_samples": [condStr],
-                                        "status_code": status,
-                                        "indicator": ind,
-                                        "snippet": (body or "")[:200],
-                                        "count": 1,
-                                        "type": "vulnerable",
-                                    }
-
-                                else:
-                                    entry = self.vulnerableForms[resultsKey]
-                                    entry["count"] += 1
-                                    if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                        entry["payload_samples"].append(condStr)
-
-                        continue
-
                     # Store bools then check when we have both
                     if kind in ("bool_true", "bool_false"):
                         key = ("GET" if method == "GET" else "POST", url, tuple(sorted(fields)), pid)
@@ -593,5 +547,96 @@ class SQLiFuzzer:
                                     entry["count"] += 1
                                     if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                                         entry["payload_samples"].append(payloadUsed)
+
+                # Sequentially fuzz for blind timing
+                baselineMs = self.getBlindBaseline(url, method, fields)
+                if baselineMs > 0.0:
+                    for raw in self.payloads:
+                        if not isBlindPayload(raw):
+                            continue
+
+                        payload = expandTimeToken(raw)
+                        if method == "POST":
+                            # POST form fuzzing
+                            data = {}
+
+                            for field in fields:
+                                # Inject payload into fuzzable fields
+                                if isFuzzableField(field):
+                                    data[field] =payload
+
+                                else:
+                                    data[field] = "test"
+
+                        else:
+                            # GET form fuzzing
+                            params = {}
+                            for field in fields:
+                                if isFuzzableField(field):
+                                    params[field] = payload
+
+                                else:
+                                    params[field] = "test"
+
+                            params = autoSubmits(baseText, params)
+
+                        trialElapses = []
+                        lastBody = ""
+                        lastStatus = 0
+                        finUrl = url
+
+                        for _ in range(max(1, int(TIMING_PAYLOAD_TRIALS))):
+                            try:
+                                if method == "POST":
+                                    res = self.session.post(url, data= data, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
+
+                                else:
+                                     res = self.session.get(url, params=params, headers= self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
+
+                                trialElapses.append(res.elapsed.total_seconds() * 1000.0)
+                                lastBody = res.text or ""
+                                lastStatus = res.status_code
+                                finUrl = (res.url or url)
+
+                            except Exception:
+                                continue
+
+                        if not trialElapses:
+                            continue
+
+                        trialElapses.sort()
+                        mid = len(trialElapses) //2
+                        testMs = trialElapses[mid] if len(trialElapses) %2 == 1 else (trialElapses[mid - 1] + trialElapses[mid]) /2.0
+
+                        if not detectSQLiBlind(baselineMs,testMs):
+                            continue
+
+                        confirmMs = self.getBlindBaseline(url, method, fields, probes=TIMING_CONFIRM_PROBES)
+                        finalBaseline = min(baselineMs, confirmMs)
+                        if not detectSQLiBlind(finalBaseline, testMs):
+                            continue
+
+                        pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+                        ind = "blind_sql_timing"
+                        resultsKey = (pageKey, ind, "vulnerable")
+
+                        with self.lock:
+                            if resultsKey not in self.vulnerableForms:
+                                self.vulnerableForms[resultsKey] = {
+                                    "url": pageKey,
+                                    "payload": payload,
+                                    "payload_samples": [payload],
+                                    "status_code": lastStatus,
+                                    "indicator": ind,
+                                    "snippet": (lastBody or "")[:200],
+                                    "count": 1,
+                                    "type": "vulnerable",
+                                }
+
+                            else:
+                                entry = self.vulnerableForms[resultsKey]
+                                entry["count"] += 1
+                                if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                    entry["payload_samples"].append(payload)
 
             return list(self.vulnerableForms.values())
