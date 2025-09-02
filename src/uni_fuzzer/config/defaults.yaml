@@ -141,12 +141,12 @@ sqli:
     - "dbms_pipe.receive_message"
   max_samples_per_group: 3
   timing_threshold_ms: 2500
-  blind_timing_factor: 2.2
-  blind_time: 6
-  timeout_blind: 30
+  blind_timing_factor: 2.5
+  blind_time: 2
+  timeout_blind: 120
   timing_baseline_probes: 5
   timing_payload_trials: 2
-  timing_confirm_probes: 1
+  timing_confirm_probes: 2
   auto_submit_keys:
     - "submit"
     - "btn"
@@ -165,6 +165,7 @@ sqli:
     - "' AND ({cond})-- "
     - "') AND ({cond})-- "
     - ") AND ({cond})-- "
+    - "' or {cond};#"
   boolean_success_keywords:
     - "exists"
     - "found"

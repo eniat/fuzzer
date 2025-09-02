@@ -162,11 +162,16 @@ def run(args):
             endpoints, forms = crawler.crawl(args.start_url)
             sharedSession = getattr(crawler, "session", None)
 
-            # ADDED FOR TESTING SQLI BLING TIMING REMOVE AFTTER
+            # ADDED FOR TESTING SQLI BLING TIMING REMOVE AFTER 15 is timing now works and 4 is boolean.
             # ------------------------------------------------------------------
             forms.append({
                 "url": f"{args.start_url}/sqli_15.php",
-                "method": "POST",
+                "method": "GET",
+                "formFields": ["title"],
+            })
+            forms.append({
+                "url": f"{args.start_url}/sqli_4.php",
+                "method": "GET",
                 "formFields": ["title"],
             })
             # ------------------------------------------------------------------

@@ -158,6 +158,7 @@ class SQLiFuzzer:
 
         self.vulnerableForms = {}
         self.lock = threading.Lock()
+        self.confirmLock = threading.Lock()
 
         if self.auth and self.loginUsername and self.loginPassword:
             ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
@@ -218,7 +219,17 @@ class SQLiFuzzer:
             elapses = []
 
             if method == "POST":
+                res = self.session.post(
+                    endpoint,
+                    headers=self.headers,
+                    timeout=cfg["sqli"]["timeout_blind"],
+                    allow_redirects=cfg["http"]["redirects"]["baseline_post"]
+                )
+
+                html = res.text or ""
+
                 baseData = {f: "1" for f in fields}
+                baseData = autoSubmits(html, baseData)
 
                 for _ in range(max(1, int(probes))):
                     res = self.session.post(
@@ -293,7 +304,7 @@ class SQLiFuzzer:
                 baseText, baseStatus = self.getBaseline(url, method, fields)
 
                 for raw in self.payloads:
-                    payload = expandTimeToken(raw)
+                    payload = raw
                     if method == "POST":
                         # POST form fuzzing
                         data = {}
@@ -304,7 +315,7 @@ class SQLiFuzzer:
                                 data[field] = payload
 
                             else:
-                                data[field] = "test"
+                                data[field] = "1"
 
                         fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
 
@@ -319,7 +330,7 @@ class SQLiFuzzer:
                                 params[field] = payload
 
                             else:
-                                params[field] = "test"
+                                params[field] = "1"
 
                         params = autoSubmits(baseText, params)
 
@@ -525,6 +536,11 @@ class SQLiFuzzer:
 
                         if detectSQLiDiff(true["body"], false["body"], isNotSQLIBlind= False):
 
+                            # Check for slight absolute length change for less false positves
+                            sizeDelta = abs(len(true["body"]) - len(false["body"]))
+                            if not (true["status"] != false["status"] or sizeDelta >= 10):
+                                continue
+
                             pageKey = (true["url"] or url).split("?", 1)[0].split("#", 1)[0]
                             resultsKey = (pageKey, "blind_sql_boolean", "vulnerable")
                             payloadUsed = f'TRUE:{true["cond"]} | FALSE:{false["cond"]}'
@@ -551,92 +567,141 @@ class SQLiFuzzer:
                 # Sequentially fuzz for blind timing
                 baselineMs = self.getBlindBaseline(url, method, fields)
                 if baselineMs > 0.0:
+                    confirmJobs = []
                     for raw in self.payloads:
                         if not isBlindPayload(raw):
                             continue
 
                         payload = expandTimeToken(raw)
-                        if method == "POST":
-                            # POST form fuzzing
-                            data = {}
-
-                            for field in fields:
-                                # Inject payload into fuzzable fields
-                                if isFuzzableField(field):
-                                    data[field] =payload
-
-                                else:
-                                    data[field] = "test"
-
-                        else:
-                            # GET form fuzzing
-                            params = {}
-                            for field in fields:
-                                if isFuzzableField(field):
-                                    params[field] = payload
-
-                                else:
-                                    params[field] = "test"
-
-                            params = autoSubmits(baseText, params)
-
-                        trialElapses = []
-                        lastBody = ""
-                        lastStatus = 0
-                        finUrl = url
-
-                        for _ in range(max(1, int(TIMING_PAYLOAD_TRIALS))):
-                            try:
-                                if method == "POST":
-                                    res = self.session.post(url, data= data, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
-
-                                else:
-                                     res = self.session.get(url, params=params, headers= self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
-
-                                trialElapses.append(res.elapsed.total_seconds() * 1000.0)
-                                lastBody = res.text or ""
-                                lastStatus = res.status_code
-                                finUrl = (res.url or url)
-
-                            except Exception:
-                                continue
-
-                        if not trialElapses:
+                        targets = [f for f in fields if isFuzzableField(f)]
+                        if not targets:
                             continue
 
-                        trialElapses.sort()
-                        mid = len(trialElapses) //2
-                        testMs = trialElapses[mid] if len(trialElapses) %2 == 1 else (trialElapses[mid - 1] + trialElapses[mid]) /2.0
+                        for target in targets:
 
-                        if not detectSQLiBlind(baselineMs,testMs):
-                            continue
+                            if method == "POST":
+                                # POST form fuzzing
+                                data = {}
 
-                        confirmMs = self.getBlindBaseline(url, method, fields, probes=TIMING_CONFIRM_PROBES)
-                        finalBaseline = min(baselineMs, confirmMs)
-                        if not detectSQLiBlind(finalBaseline, testMs):
-                            continue
+                                for field in fields:
+                                    # Inject payload into fuzzable fields
+                                    if field == target:
+                                        data[field] = payload
 
-                        pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                        ind = "blind_sql_timing"
-                        resultsKey = (pageKey, ind, "vulnerable")
-
-                        with self.lock:
-                            if resultsKey not in self.vulnerableForms:
-                                self.vulnerableForms[resultsKey] = {
-                                    "url": pageKey,
-                                    "payload": payload,
-                                    "payload_samples": [payload],
-                                    "status_code": lastStatus,
-                                    "indicator": ind,
-                                    "snippet": (lastBody or "")[:200],
-                                    "count": 1,
-                                    "type": "vulnerable",
-                                }
+                                    else:
+                                        data[field] = "1"
+                                data = autoSubmits(baseText, data)
 
                             else:
-                                entry = self.vulnerableForms[resultsKey]
-                                entry["count"] += 1
-                                if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                    entry["payload_samples"].append(payload)
+                                # GET form fuzzing
+                                params = {}
+                                for field in fields:
+                                    if field == target:
+                                        params[field] = payload
+
+                                    else:
+                                        params[field] = "1"
+
+                                params = autoSubmits(baseText, params)
+
+                            # Run multiple trials to get more accurate reading
+                            trialElapses = []
+
+                            for _ in range(max(1, int(TIMING_PAYLOAD_TRIALS))):
+                                try:
+                                    if method == "POST":
+                                        res = self.session.post(url, data= data, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
+
+                                    else:
+                                         res = self.session.get(url, params=params, headers= self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
+
+                                    # Convert and keep only time data
+                                    trialElapses.append(res.elapsed.total_seconds() * 1000.0)
+
+                                except Exception:
+                                    continue
+
+                            if not trialElapses:
+                                continue
+
+                            # Use the median to help with anomalies
+                            trialElapses.sort()
+                            mid = len(trialElapses) //2
+                            testMs = trialElapses[mid] if len(trialElapses) %2 == 1 else (trialElapses[mid - 1] + trialElapses[mid]) /2.0
+
+                            if not detectSQLiBlind(baselineMs,testMs):
+                                continue
+
+                            confirmJobs.append((target, payload))
+
+                    # Check previous hits again serially to stop other payloads having a domino effect
+                    if confirmJobs:
+                        with self.confirmLock:
+
+                            confirmBaseMs = self.getBlindBaseline(url, method, fields,probes=TIMING_CONFIRM_PROBES) or baselineMs
+                            finalBaseMs = min(baselineMs, confirmBaseMs)
+
+                            if not detectSQLiBlind(finalBaseMs, testMs):
+                                continue
+
+                            for (target, payload) in confirmJobs:
+                                try:
+                                    if method == "POST":
+                                        # POST form fuzzing
+                                        data = {f: (payload if f == target else "1") for f in fields}
+                                        data = autoSubmits(baseText, data)
+
+                                        res = self.session.post(
+                                            url,
+                                            data=data,
+                                            headers=self.headers,
+                                            timeout=cfg["sqli"]["timeout_blind"],
+                                            allow_redirects=cfg["http"]["redirects"]["fuzz_post"]
+                                        )
+
+                                    else:
+                                        # GET form fuzzing
+                                        params = {f: (payload if f == target else "1") for f in fields}
+                                        params = autoSubmits(baseText, params)
+
+                                        res = self.session.get(
+                                            url,
+                                            params=params,
+                                            headers=self.headers,
+                                            timeout=cfg["sqli"]["timeout_blind"],
+                                            allow_redirects=cfg["http"]["redirects"]["fuzz_get"]
+                                        )
+
+                                except Exception:
+                                    continue
+
+                                # Confirm the timing
+                                testMs = res.elapsed.total_seconds() * 1000.0
+                                if not detectSQLiBlind(confirmBaseMs, testMs):
+                                    continue
+
+                                # Record the confirmed payload
+                                finUrl = getattr(res, "url", url) or url
+                                pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+                                resultsKey = (pageKey, "blind_sql_timing", "vulnerable")
+
+                                with self.lock:
+                                    if resultsKey not in self.vulnerableForms:
+                                        self.vulnerableForms[resultsKey] = {
+                                            "url": pageKey,
+                                            "payload": payload,
+                                            "payload_samples": [payload],
+                                            "status_code": res.status_code,
+                                            "indicator": "blind_sql_timing",
+                                            "snippet": (res.text or "")[:200],
+                                            "count": 1,
+                                            "type": "vulnerable",
+                                        }
+
+                                    else:
+                                        entry = self.vulnerableForms[resultsKey]
+                                        entry["count"] += 1
+                                        if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                            entry["payload_samples"].append(payload)
 
             return list(self.vulnerableForms.values())
