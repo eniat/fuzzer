@@ -162,20 +162,6 @@ def run(args):
             endpoints, forms = crawler.crawl(args.start_url)
             sharedSession = getattr(crawler, "session", None)
 
-            # ADDED FOR TESTING SQLI BLING TIMING REMOVE AFTER 15 is timing now works and 4 is boolean.
-            # ------------------------------------------------------------------
-            forms.append({
-                "url": f"{args.start_url}/sqli_15.php",
-                "method": "GET",
-                "formFields": ["title"],
-            })
-            forms.append({
-                "url": f"{args.start_url}/sqli_4.php",
-                "method": "GET",
-                "formFields": ["title"],
-            })
-            # ------------------------------------------------------------------
-
             crawlerPrint(endpoints, forms, output_to_file=args.output_to_file, filename="CrawlerOutput.txt")
 
             rawDomForms = forms[:]
@@ -410,7 +396,7 @@ def run(args):
 
                 if args.fuzz_sqli_b:
 
-                    print(f"[Thread] SQLi Form Fuzzing: {fullUrl}")
+                    print(f"[Thread] SQLi Blind Form Fuzzing: {fullUrl}")
                     fuzzer = SQLiFuzzer(
                         baseUrl=args.start_url,
                         useCrawler=False,

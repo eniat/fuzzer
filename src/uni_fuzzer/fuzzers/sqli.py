@@ -538,7 +538,7 @@ class SQLiFuzzer:
 
                             # Check for slight absolute length change for less false positves
                             sizeDelta = abs(len(true["body"]) - len(false["body"]))
-                            if not (true["status"] != false["status"] or sizeDelta >= 10):
+                            if not (true["status"] != false["status"] or sizeDelta >= 1):
                                 continue
 
                             pageKey = (true["url"] or url).split("?", 1)[0].split("#", 1)[0]

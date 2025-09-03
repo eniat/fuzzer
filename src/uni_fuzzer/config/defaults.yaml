@@ -140,11 +140,11 @@ sqli:
     - "dbms_lock.sleep"
     - "dbms_pipe.receive_message"
   max_samples_per_group: 3
-  timing_threshold_ms: 2500
-  blind_timing_factor: 2.5
-  blind_time: 2
+  timing_threshold_ms: 700
+  blind_timing_factor: 2.0
+  blind_time: 1
   timeout_blind: 120
-  timing_baseline_probes: 5
+  timing_baseline_probes: 3
   timing_payload_trials: 2
   timing_confirm_probes: 2
   auto_submit_keys:
