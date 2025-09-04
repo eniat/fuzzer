@@ -14,6 +14,7 @@ http:
 concurrency:
   max_workers: 20
   path_workers_recursive: 10
+  threads_per_session: 5
 
 crawler:
   mode_default: "both"
@@ -21,6 +22,7 @@ crawler:
   rate_limit_default: 0.0
   headless_default: true
   output_to_file_default: false
+  option_capacity: 80
   junk_keywords:
     - "mat-"
     - "mdc-"
@@ -63,6 +65,7 @@ fuzz:
     - bug
     - mail_activation
     - create_db'
+    - bug
 
 path_traversal:
   max_samples_per_group: 3

@@ -1,8 +1,11 @@
-import argparse
+import requests
+import time
+from requests.adapters import HTTPAdapter
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath, Path
 
+from uni_fuzzer.auth.auth import login
 from uni_fuzzer.crawler.crawler import Crawler
 from uni_fuzzer.fuzzers.path import PathFuzzer
 from uni_fuzzer.llm.semantic_llm import filterML
@@ -162,6 +165,34 @@ def run(args):
             endpoints, forms = crawler.crawl(args.start_url)
             sharedSession = getattr(crawler, "session", None)
 
+            # To resolve HTTP login failures from threads spamming auth set up a pool of logged in sessions shared by threads
+            MAX_WORKERS = int(cfg["concurrency"]["max_workers"])
+            THREADS_PER_SESSION = max(1, int(cfg["concurrency"]["threads_per_session"]))
+            pool = max(1, (MAX_WORKERS + THREADS_PER_SESSION - 1) // THREADS_PER_SESSION)
+
+            sessPool = []
+            for i in range(pool):
+
+                sess = requests.Session()
+                adapter = HTTPAdapter(pool_connections=THREADS_PER_SESSION, pool_maxsize=THREADS_PER_SESSION, max_retries= 0)
+                sess.mount("http://", adapter)
+                sess.mount("https://", adapter)
+                sess.trust_env = False
+
+                # Login once per session (serial, cheap)
+                if args.auth and args.username and args.password:
+                    try:
+                        ok = login(sess, args.start_url, args.username, args.password, args.login_path)
+                        if not ok:
+                            print("[-] Login failed")
+
+                    except Exception:
+                        continue
+                    # Delay to not cause failures
+                    time.sleep(0.05 * (i + 1))
+                sessPool.append(sess)
+
+
             crawlerPrint(endpoints, forms, output_to_file=args.output_to_file, filename="CrawlerOutput.txt")
 
             rawDomForms = forms[:]
@@ -203,7 +234,7 @@ def run(args):
 
             print(f"[+] Beginning fuzzing... \n")
 
-            def fuzzEndpoint(ep):
+            def fuzzEndpoint(ep, sess):
                 """
                     To allow for parallel calls
                 """
@@ -224,8 +255,8 @@ def run(args):
                         wordlistPath =args.wordlist,
                         outputToFile= args.output_to_file,
                         isSilent = True,
-                        session=sharedSession,
-                        auth=args.auth,
+                        session=sess,
+                        auth=False,
                     )
                     fuzzer.visitedPaths = globalVisitedPaths
                     fuzzer.visitedFuzzPaths = globalVisitedFuzzPaths
@@ -256,8 +287,8 @@ def run(args):
                         wordlistPath= args.wordlist,
                         outputToFile= args.output_to_file,
                         isSilent= True,
-                        session=sharedSession,
-                        auth=args.auth,
+                        session=sess,
+                        auth=False,
                     )
                     fuzzer.visitedPaths = globalVisitedPaths
                     fuzzer.visitedFuzzPaths = globalVisitedFuzzPaths
@@ -281,11 +312,8 @@ def run(args):
                         outputToFile=args.output_to_file,
                         isSilent =True,
                         headless=not args.no_headless,
-                        session=sharedSession,
-                        auth=args.auth,
-                        loginUsername=args.username,
-                        loginPassword=args.password,
-                        loginPath=args.login_path
+                        session=sess,
+                        auth=False,
                     )
 
                     res = fuzzer.paramXSS()
@@ -298,7 +326,7 @@ def run(args):
 
                 return results
 
-            def fuzzForm(form):
+            def fuzzForm(form, sess):
 
                 results = []
 
@@ -316,11 +344,8 @@ def run(args):
                         outputToFile=args.output_to_file,
                         isSilent=True,
                         headless=not args.no_headless,
-                        session=sharedSession,
-                        auth=args.auth,
-                        loginUsername=args.username,
-                        loginPassword=args.password,
-                        loginPath=args.login_path
+                        session=sess,
+                        auth=False,
                     )
 
                     res = fuzzer.formXSS([form])
@@ -341,11 +366,8 @@ def run(args):
                         outputToFile=args.output_to_file,
                         isSilent=True,
                         headless=not args.no_headless,
-                        session=sharedSession,
-                        auth=args.auth,
-                        loginUsername=args.username,
-                        loginPassword=args.password,
-                        loginPath=args.login_path
+                        session=sess,
+                        auth=False,
                     )
 
                     # Pass directories of forms/ shared directory endpoints
@@ -373,11 +395,8 @@ def run(args):
                         wordlistPath=args.wordlist,
                         outputToFile=args.output_to_file,
                         isSilent=True,
-                        session=sharedSession,
-                        auth=args.auth,
-                        loginUsername=args.username,
-                        loginPassword=args.password,
-                        loginPath=args.login_path
+                        session=sess,
+                        auth=False,
                     )
 
                     res = fuzzer.SQLiFuzz([form])
@@ -403,11 +422,8 @@ def run(args):
                         wordlistPath=args.wordlist,
                         outputToFile=args.output_to_file,
                         isSilent=True,
-                        session=sharedSession,
-                        auth=args.auth,
-                        loginUsername=args.username,
-                        loginPassword=args.password,
-                        loginPath=args.login_path
+                        session=sess,
+                        auth=False,
                     )
 
                     res = fuzzer.SQLiBlindFuzz([form])
@@ -424,8 +440,11 @@ def run(args):
             if args.fuzz_paths or args.fuzz_params or args.xss_params:
                 print(f"\n[+] Starting threaded fuzzing on discovered endpoints... \n")
                 with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
-                    # Run fuzzer using threads across all endpoints
-                    futures = [executor.submit(fuzzEndpoint, ep) for ep in UniqueEndpoints]
+                    # Run fuzzer using threads across all endpoints assigning a session from the session pool
+                    futures = []
+                    for i, ep in enumerate(UniqueEndpoints):
+                        sess = sessPool[i % len(sessPool)]
+                        futures.append(executor.submit(fuzzEndpoint, ep, sess))
 
                     for future in as_completed(futures):
                         results = future.result()
@@ -434,8 +453,11 @@ def run(args):
             if args.xss_forms or args.xss_stored or args.fuzz_sqli or args.fuzz_sqli_b:
                 print(f"\n[+] Starting threaded fuzzing on discovered Forms... \n")
                 with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
-                    # Run fuzzer using threads across all forms
-                    futures = [executor.submit(fuzzForm, form) for form in forms]
+                    # Run fuzzer using threads across all forms assigning a session from the session pool
+                    futures = []
+                    for i, form in enumerate(forms):
+                        sess = sessPool[i % len(sessPool)]
+                        futures.append(executor.submit(fuzzForm, form, sess))
 
                     for future in as_completed(futures):
                         res = future.result()
