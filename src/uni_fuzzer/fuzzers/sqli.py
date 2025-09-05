@@ -87,7 +87,7 @@ def expandTimeToken(payload, seconds=BLIND_TIME):
     """
     return (payload or "").replace("__TIME__", str(seconds))
 
-def detectSQLiDiff(baseHtml, html, isNotSQLIBlind=True):
+def detectSQLiDiff(baseHtml, html, isNotSQLIBlind=True, true= None, false=None):
     """
         Detect SQLi content by comparing the basehtml with the html after and assessing differences/
         Detect blind SQLi by checking two word lists
@@ -96,6 +96,12 @@ def detectSQLiDiff(baseHtml, html, isNotSQLIBlind=True):
     h = (html or "").lower()
 
     if not isNotSQLIBlind:
+        # Check if payloads are reflected
+        if (true and true.lower() in h) or (true and true.lower() in b):
+            return False
+        if (false and false.lower() in h) or (false and false.lower() in b):
+            return False
+
         hasSuccB = any(s in b for s in BOOLEAN_SUCCESS_KEYWORDS)
         hasFailB = any(f in b for f in BOOLEAN_FAILURE_KEYWORDS)
         hasSuccH = any(s in h for s in BOOLEAN_SUCCESS_KEYWORDS)
@@ -534,9 +540,9 @@ class SQLiFuzzer:
                     if "bool_true" in parts and "bool_false" in parts:
                         true, false = parts["bool_true"], parts["bool_false"]
 
-                        if detectSQLiDiff(true["body"], false["body"], isNotSQLIBlind= False):
+                        if detectSQLiDiff(true["body"], false["body"], isNotSQLIBlind= False, true=true["cond"], false=false["cond"]):
 
-                            # Check for slight absolute length change for less false positves
+                            # Check for slight absolute length change for less false positives
                             sizeDelta = abs(len(true["body"]) - len(false["body"]))
                             if not (true["status"] != false["status"] or sizeDelta >= 1):
                                 continue
