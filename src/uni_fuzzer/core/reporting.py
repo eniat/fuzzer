@@ -62,6 +62,16 @@ def fuzzerPrint(vulnerabilities, output_to_file= False, filename="FuzzerOutput.t
             print(f"    Payload:       {vuln['payload']}")
             print(f"    Status Code:   {vuln.get('status_code', 'N/A')}")
             print(f"    Indicator Hit: {vuln.get('indicator', 'N/A')}")
+
+            cnt = vuln.get("count")
+            if isinstance(cnt, int) and cnt > 1:
+                print(f"    Count:         {cnt}")
+
+            samples = (vuln.get("payload_samples") or [])
+
+            samples = [s for s in samples if s != vuln.get('payload')]
+            if samples:
+                print(f"    Payload Samples: {samples[:5]}")
             print()
 
         if output_to_file:

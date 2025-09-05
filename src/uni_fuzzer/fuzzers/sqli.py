@@ -87,7 +87,7 @@ def expandTimeToken(payload, seconds=BLIND_TIME):
     """
     return (payload or "").replace("__TIME__", str(seconds))
 
-def detectSQLiDiff(baseHtml, html, isNotSQLIBlind=True, true= None, false=None):
+def detectSQLiDiff(baseHtml, html, isNotSQLIBlind=True, true= None, false=None, payload=None):
     """
         Detect SQLi content by comparing the basehtml with the html after and assessing differences/
         Detect blind SQLi by checking two word lists
@@ -112,6 +112,11 @@ def detectSQLiDiff(baseHtml, html, isNotSQLIBlind=True, true= None, false=None):
             return True
 
         return False
+
+    if isNotSQLIBlind:
+        # Check if reflected
+        if (payload and payload.lower() in h) or (payload and payload.lower() in b):
+            return False
 
     if re.search(r"user id (exists|is missing) in the database", h, flags=re.I) \
             and not re.search(r"user id (exists|is missing) in the database", b, flags=re.I):
@@ -369,7 +374,7 @@ class SQLiFuzzer:
 
                     if isErr or (status != baseStatus and status >= 400):
                         pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                        resultsKey = (pageKey, (indicator or "status_code_change"), "potential")
+                        resultsKey = (pageKey, (indicator or "status_code_change"), "sqli_potential")
 
                         with self.lock:
                             if resultsKey not in self.vulnerableForms:
@@ -381,7 +386,8 @@ class SQLiFuzzer:
                                     "indicator": indicator or "status_code_change",
                                     "snippet": (body or "")[:200],
                                     "count": 1,
-                                    "type": "potential",
+                                    "type": "sqli_potential",
+                                    "severity": "potential",
                                 }
 
                             else:
@@ -393,10 +399,10 @@ class SQLiFuzzer:
 
                     # Check for valid SQLi ran code
                     if baseStatus:
-                        if status != baseStatus or detectSQLiDiff(baseText, body):
+                        if status != baseStatus or detectSQLiDiff(baseText, body, payload=payload):
 
                             pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                            resultsKey = (pageKey, "detected_sql_content", "vulnerable")
+                            resultsKey = (pageKey, "detected_sql_content", "sqli")
 
                             with self.lock:
                                 if resultsKey not in self.vulnerableForms:
@@ -408,7 +414,8 @@ class SQLiFuzzer:
                                         "indicator": "detected_sql_content",
                                         "snippet": (body or "")[:200],
                                         "count": 1,
-                                        "type": "vulnerable",
+                                        "type": "sqli",
+                                        "severity": "vulnerable",
                                     }
 
                                 else:
@@ -548,7 +555,7 @@ class SQLiFuzzer:
                                 continue
 
                             pageKey = (true["url"] or url).split("?", 1)[0].split("#", 1)[0]
-                            resultsKey = (pageKey, "blind_sql_boolean", "vulnerable")
+                            resultsKey = (pageKey, "blind_sql_boolean", "sqli_blind")
                             payloadUsed = f'TRUE:{true["cond"]} | FALSE:{false["cond"]}'
 
                             with self.lock:
@@ -561,7 +568,8 @@ class SQLiFuzzer:
                                         "indicator": "blind_sql_boolean",
                                         "snippet": (true["body"] or "")[:200],
                                         "count": 1,
-                                        "type": "vulnerable",
+                                        "type": "sqli_blind",
+                                        "severity": "vulnerable",
                                     }
 
                                 else:
@@ -645,10 +653,6 @@ class SQLiFuzzer:
                         with self.confirmLock:
 
                             confirmBaseMs = self.getBlindBaseline(url, method, fields,probes=TIMING_CONFIRM_PROBES) or baselineMs
-                            finalBaseMs = min(baselineMs, confirmBaseMs)
-
-                            if not detectSQLiBlind(finalBaseMs, testMs):
-                                continue
 
                             for (target, payload) in confirmJobs:
                                 try:
@@ -689,7 +693,7 @@ class SQLiFuzzer:
                                 # Record the confirmed payload
                                 finUrl = getattr(res, "url", url) or url
                                 pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                                resultsKey = (pageKey, "blind_sql_timing", "vulnerable")
+                                resultsKey = (pageKey, "blind_sql_timing", "sqli_blind")
 
                                 with self.lock:
                                     if resultsKey not in self.vulnerableForms:
@@ -701,7 +705,8 @@ class SQLiFuzzer:
                                             "indicator": "blind_sql_timing",
                                             "snippet": (res.text or "")[:200],
                                             "count": 1,
-                                            "type": "vulnerable",
+                                            "type": "sqli_blind",
+                                            "severity": "vulnerable",
                                         }
 
                                     else:

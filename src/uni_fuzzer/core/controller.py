@@ -78,6 +78,27 @@ def run(args):
     if args.wordlist:
         args.wordlist = sortWordlist(args.wordlist)
 
+    # Specific wordlists
+    if args.pwordlist:
+        pWordlist = sortWordlist(args.pwordlist)
+    else:
+        pWordlist = None
+
+    if args.xwordlist:
+        xWordlist = sortWordlist(args.xwordlist)
+    else:
+        xWordlist = None
+
+    if args.swordlist:
+        sWordlist = sortWordlist(args.swordlist)
+    else:
+        sWordlist = None
+
+    # Checks if wordlist given or fallsback to base
+    wordlistPathsParams = pWordlist or args.wordlist
+    wordlistXss = xWordlist or args.wordlist
+    wordlistSqli = sWordlist or args.wordlist
+
     # if --llm is used wordlist needs to be provided
     if args.llm and not args.wordlist:
         print("[-] You must provide --wordlist when using --llm.")
@@ -95,6 +116,13 @@ def run(args):
                 return
 
             args.wordlist = filtered
+
+            if not pWordlist:
+                wordlistPathsParams = args.wordlist
+            if not xWordlist:
+                wordlistXss = args.wordlist
+            if not sWordlist:
+                wordlistSqli = args.wordlist
 
             # For debugging of the LLM
             # print("[+] Matched payloads:")
@@ -115,7 +143,8 @@ def run(args):
             and not args.xss_stored
             and not args.xss_dom
             and not args.fuzz_sqli
-            and not args.fuzz_sqli_b):
+            and not args.fuzz_sqli_b
+            and not getattr(args, "all", False)):
 
         crawler = Crawler(
             mode=args.crawler_mode,
@@ -131,15 +160,10 @@ def run(args):
 
 
         endpoints, forms = crawler.crawl(args.start_url)
-        sharedSession = getattr(crawler, "session", None)
 
         crawlerPrint(endpoints, forms, output_to_file=args.output_to_file, filename="CrawlerOutput.txt")
 
     else:
-
-        if (not args.wordlist) and (args.fuzz_paths or args.fuzz_params or args.xss_params or args.xss_forms or args.xss_stored or args.fuzz_sqli or args.fuzz_sqli_b):
-            print("The Fuzzer requires a --wordlist to run for the selected mode")
-            return
 
         if args.use_crawler:
 
@@ -205,7 +229,7 @@ def run(args):
             if not endpoints and not forms:
 
                 print("[-] No endpoints or forms found by crawler.")
-                if not (args.xss_forms or args.xss_stored or args.xss_dom or args.fuzz_sqli):
+                if not (args.xss_forms or args.xss_stored or args.xss_dom or args.fuzz_sqli or getattr(args, "all", False)):
                     return
 
             # Derive base url for relative links
@@ -234,6 +258,16 @@ def run(args):
 
             print(f"[+] Beginning fuzzing... \n")
 
+            # Checks for fallback wordlist or specific
+            if (args.fuzz_paths or args.fuzz_params or getattr(args, "all", False)) and not wordlistPathsParams:
+                print("[-] Skipping path/param fuzzing: provide --pwordlist or --wordlist")
+
+            if (args.xss_params or args.xss_forms or args.xss_stored or args.xss_dom or getattr(args, "all", False)) and not wordlistXss:
+                print("[-] Skipping XSS fuzzing: provide --xwordlist or --wordlist")
+
+            if (args.fuzz_sqli or args.fuzz_sqli_b or getattr(args, "all", False)) and not wordlistSqli:
+                print("[-] Skipping SQLi fuzzing: provide --swordlist or --wordlist")
+
             def fuzzEndpoint(ep, sess):
                 """
                     To allow for parallel calls
@@ -252,7 +286,7 @@ def run(args):
 
                     fuzzer = PathFuzzer(
                         baseUrl= fullUrl,
-                        wordlistPath =args.wordlist,
+                        wordlistPath =wordlistPathsParams,
                         outputToFile= args.output_to_file,
                         isSilent = True,
                         session=sess,
@@ -284,7 +318,7 @@ def run(args):
 
                     fuzzer = PathFuzzer(
                         baseUrl= fuzzedUrl,
-                        wordlistPath= args.wordlist,
+                        wordlistPath= wordlistPathsParams,
                         outputToFile= args.output_to_file,
                         isSilent= True,
                         session=sess,
@@ -308,7 +342,7 @@ def run(args):
                     fuzzer = XSSFuzzer(
                         baseUrl= fuzzedUrl,
                         useCrawler=False,
-                        wordlistPath=args.wordlist,
+                        wordlistPath=wordlistXss,
                         outputToFile=args.output_to_file,
                         isSilent =True,
                         headless=not args.no_headless,
@@ -319,9 +353,6 @@ def run(args):
                     res = fuzzer.paramXSS()
 
                     if res:
-                        for vuln in res:
-                            vuln["type"] = "xss"
-
                         results.extend(res)
 
                 return results
@@ -340,7 +371,7 @@ def run(args):
                     fuzzer = XSSFuzzer(
                         baseUrl=args.start_url,
                         useCrawler=False,
-                        wordlistPath=args.wordlist,
+                        wordlistPath=wordlistXss,
                         outputToFile=args.output_to_file,
                         isSilent=True,
                         headless=not args.no_headless,
@@ -351,8 +382,6 @@ def run(args):
                     res = fuzzer.formXSS([form])
 
                     if res:
-                        for vuln in res:
-                            vuln["type"] = "xss_form"
 
                         results.extend(res)
 
@@ -362,7 +391,7 @@ def run(args):
                     fuzzer = XSSFuzzer(
                         baseUrl=args.start_url,
                         useCrawler= False,
-                        wordlistPath=args.wordlist,
+                        wordlistPath=wordlistXss,
                         outputToFile=args.output_to_file,
                         isSilent=True,
                         headless=not args.no_headless,
@@ -381,8 +410,6 @@ def run(args):
                     res = fuzzer.storedXSS([form], endpoints=relevantEndpoints)
 
                     if res:
-                        for vuln in res:
-                            vuln["type"] = "xss_stored"
 
                         results.extend(res)
 
@@ -392,7 +419,7 @@ def run(args):
                     fuzzer = SQLiFuzzer(
                         baseUrl=args.start_url,
                         useCrawler= False,
-                        wordlistPath=args.wordlist,
+                        wordlistPath=wordlistSqli,
                         outputToFile=args.output_to_file,
                         isSilent=True,
                         session=sess,
@@ -402,16 +429,10 @@ def run(args):
                     res = fuzzer.SQLiFuzz([form])
 
                     if res:
-                        for vuln in res:
-                            if vuln.get("type") == "vulnerable":
-                                vuln["type"] = "sqli"
-                            elif vuln.get("type") == "potential":
-                                vuln["type"] = "sqli_potential"
-
-                        results.extend([v for v in res if v.get("type") == "sqli"])
-
                         if args.report_all:
-                            results.extend([v for v in res if v.get("type") == "sqli_potential"])
+                            results.extend(res)
+                        else:
+                            results.extend([v for v in res if v.get("type") != "potential_sqli"])
 
                 if args.fuzz_sqli_b:
 
@@ -419,7 +440,7 @@ def run(args):
                     fuzzer = SQLiFuzzer(
                         baseUrl=args.start_url,
                         useCrawler=False,
-                        wordlistPath=args.wordlist,
+                        wordlistPath=wordlistSqli,
                         outputToFile=args.output_to_file,
                         isSilent=True,
                         session=sess,
@@ -429,65 +450,146 @@ def run(args):
                     res = fuzzer.SQLiBlindFuzz([form])
 
                     if res:
-                        for vuln in res:
-                            if vuln.get("indicator") in ("blind_sql_timing", "blind_sql_boolean"):
-                                vuln["type"] = "sqli_blind"
-
-                        results.extend([v for v in res if v.get("type") == "sqli_blind"])
+                        results.extend(res)
 
                 return results
 
-            if args.fuzz_paths or args.fuzz_params or args.xss_params:
-                print(f"\n[+] Starting threaded fuzzing on discovered endpoints... \n")
-                with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
-                    # Run fuzzer using threads across all endpoints assigning a session from the session pool
-                    futures = []
-                    for i, ep in enumerate(UniqueEndpoints):
-                        sess = sessPool[i % len(sessPool)]
-                        futures.append(executor.submit(fuzzEndpoint, ep, sess))
+            def runPhase():
 
-                    for future in as_completed(futures):
-                        results = future.result()
-                        allVulnerabilities.extend(results)
+                # Check for wordlists if not set False
+                if (args.fuzz_paths or args.fuzz_params) and not wordlistPathsParams:
+                    return
+                if (args.xss_params or args.xss_forms or args.xss_stored or args.xss_dom) and not wordlistXss:
+                    return
+                if (args.fuzz_sqli or args.fuzz_sqli_b) and not wordlistSqli:
+                    return
+                # Build the endpoint list
+                if args.fuzz_paths:
+                    uniqueUrls = {}
 
-            if args.xss_forms or args.xss_stored or args.fuzz_sqli or args.fuzz_sqli_b:
-                print(f"\n[+] Starting threaded fuzzing on discovered Forms... \n")
-                with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
-                    # Run fuzzer using threads across all forms assigning a session from the session pool
-                    futures = []
-                    for i, form in enumerate(forms):
-                        sess = sessPool[i % len(sessPool)]
-                        futures.append(executor.submit(fuzzForm, form, sess))
+                    for ep in endpoints:
+                        parsedPath = urlparse(ep["url"]).path or "/"
+                        baseDir = str(PurePosixPath(getdirectories(parsedPath))).rstrip("/")
 
-                    for future in as_completed(futures):
-                        res = future.result()
-                        if res:
-                            allVulnerabilities.extend(res)
+                        if baseDir not in uniqueUrls:
+                            uniqueUrls[baseDir] = ep
+                    phaseEndpoints = list(uniqueUrls.values())
+                else:
+                    phaseEndpoints = endpoints
 
-            if args.xss_dom:
-                print(f"\n[+] Running Dom XSS on discovered forms/endpoints...\n")
+                # Update visited
+                for ep in phaseEndpoints:
+                    p = urlparse(ep["url"]).path or "/"
+                    d = getdirectories(p)
+                    globalVisitedPaths.add(d)
 
-                fuzzer = XSSFuzzer(
-                    baseUrl=args.start_url,
-                    useCrawler=False,
-                    wordlistPath=args.wordlist,
-                    outputToFile=args.output_to_file,
-                    isSilent=True,
-                    headless=not args.no_headless,
-                    session=sharedSession,
-                    auth=args.auth,
-                    loginUsername=args.username,
-                    loginPassword=args.password,
-                    loginPath=args.login_path
-                )
+                if args.fuzz_paths or args.fuzz_params or args.xss_params:
+                    print(f"\n[+] Starting threaded fuzzing on discovered endpoints... \n")
+                    with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
+                        # Run fuzzer using threads across all endpoints assigning a session from the session pool
+                        futures = []
+                        for i, ep in enumerate(phaseEndpoints):
+                            sess = sessPool[i % len(sessPool)]
+                            futures.append(executor.submit(fuzzEndpoint, ep, sess))
 
-                res = fuzzer.domXSS(forms=rawDomForms, endpoints=endpoints)
+                        for future in as_completed(futures):
+                            results = future.result()
+                            if results:
+                                allVulnerabilities.extend(results)
 
-                if res:
-                    for vul in res:
-                        vul["type"] = "xss_dom"
+                if args.xss_forms or args.xss_stored or args.fuzz_sqli or args.fuzz_sqli_b:
+                    print(f"\n[+] Starting threaded fuzzing on discovered Forms... \n")
+                    with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
+                        # Run fuzzer using threads across all forms assigning a session from the session pool
+                        futures = []
+                        for i, form in enumerate(forms):
+                            sess = sessPool[i % len(sessPool)]
+                            futures.append(executor.submit(fuzzForm, form, sess))
 
-                    allVulnerabilities.extend(res)
+                        for future in as_completed(futures):
+                            res = future.result()
+                            if res:
+                                allVulnerabilities.extend(res)
+
+                if args.xss_dom:
+                    print(f"\n[+] Running Dom XSS on discovered forms/endpoints...\n")
+
+                    fuzzer = XSSFuzzer(
+                        baseUrl=args.start_url,
+                        useCrawler=False,
+                        wordlistPath=wordlistXss,
+                        outputToFile=args.output_to_file,
+                        isSilent=True,
+                        headless=not args.no_headless,
+                        session=sharedSession,
+                        auth=args.auth,
+                        loginUsername=args.username,
+                        loginPassword=args.password,
+                        loginPath=args.login_path
+                    )
+
+                    res = fuzzer.domXSS(forms=rawDomForms, endpoints=endpoints)
+
+                    if res:
+                        for vul in res:
+                            vul["type"] = "xss_dom"
+
+                        allVulnerabilities.extend(res)
+
+            # Sequential run for --all
+            if getattr(args, "all", False):
+                # Path traversal
+                args.fuzz_paths = True
+                args.fuzz_params = args.xss_params = args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_sqli = args.fuzz_sqli_b = False
+                runPhase()
+
+                # Param fuzzing
+                args.fuzz_paths = False
+                args.fuzz_params = True
+                args.xss_params = args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_sqli = args.fuzz_sqli_b = False
+                runPhase()
+
+                # XSS params
+                args.fuzz_params = False
+                args.xss_params = True
+                args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_sqli = args.fuzz_sqli_b = False
+                runPhase()
+
+                # XSS forms
+                args.xss_params = False
+                args.xss_forms = True
+                args.xss_stored = False
+                args.xss_dom = args.fuzz_sqli = args.fuzz_sqli_b = False
+                runPhase()
+
+                # XSS Stored
+                args.xss_params = False
+                args.xss_forms = False
+                args.xss_stored = True
+                args.xss_dom = args.fuzz_sqli = args.fuzz_sqli_b = False
+                runPhase()
+
+                # XSS DOM
+                args.xss_forms = False
+                args.xss_stored = False
+                args.xss_dom = True
+                args.fuzz_sqli = args.fuzz_sqli_b = False
+                runPhase()
+
+                # SQLi content
+                args.xss_dom = False
+                args.fuzz_sqli = True
+                args.fuzz_sqli_b = False
+                runPhase()
+
+                # SQLi blind
+                args.fuzz_sqli = False
+                args.fuzz_sqli_b = True
+                runPhase()
+
+            # Or run normally
+            else:
+                runPhase()
 
             fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file, filename="FuzzerOutput.txt")
 
@@ -499,7 +601,7 @@ def run(args):
                 fuzzer = XSSFuzzer(
                     baseUrl=args.start_url,
                     useCrawler=False,
-                    wordlistPath=args.wordlist,
+                    wordlistPath=wordlistXss,
                     outputToFile=args.output_to_file,
                     isSilent=True,
                     headless=not args.no_headless,
@@ -518,7 +620,7 @@ def run(args):
 
                 fuzzer = PathFuzzer(
                     baseUrl=args.start_url,
-                    wordlistPath=args.wordlist,
+                    wordlistPath=wordlistPathsParams,
                     outputToFile=args.output_to_file,
                     isSilent=True,
                     session=None,
