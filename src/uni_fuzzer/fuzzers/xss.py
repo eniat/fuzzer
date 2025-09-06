@@ -665,7 +665,7 @@ class XSSFuzzer:
                 fullUrl = rawUrl if rawUrl.startswith("http") else f"{base}{rawUrl}"
 
                 # Randomly sample the dom_payloads to save time
-                chosenPayloads = dom_payloads if len(dom_payloads) <= 4 else random.sample(dom_payloads, 4)
+                chosenPayloads = dom_payloads
 
                 # Try chosen DOM specific payloads
                 for raw in chosenPayloads:

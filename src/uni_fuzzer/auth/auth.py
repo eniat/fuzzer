@@ -1,6 +1,8 @@
+import time
 import requests
 
 from urllib.parse import urljoin,urlparse
+from requests.adapters import HTTPAdapter
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.wait import WebDriverWait
@@ -148,3 +150,39 @@ def login(session, baseUrl, username, password, loginPath=None, selectors=None, 
         return False
     except Exception:
         return False
+
+def buildSessions(auth, username, password, start_url, login_path):
+    """
+        To resolve HTTP login failures from threads spamming auth set up a pool of logged in sessions shared by threads
+    """
+    MAX_WORKERS = int(cfg["concurrency"]["max_workers"])
+    THREADS_PER_SESSION = max(1, int(cfg["concurrency"]["threads_per_session"]))
+    pool = max(1, (MAX_WORKERS + THREADS_PER_SESSION - 1) // THREADS_PER_SESSION)
+
+    sessPool = []
+    for i in range(pool):
+
+        sess = requests.Session()
+        adapter = HTTPAdapter(pool_connections=THREADS_PER_SESSION, pool_maxsize=THREADS_PER_SESSION, max_retries=0)
+        sess.mount("http://", adapter)
+        sess.mount("https://", adapter)
+        sess.trust_env = False
+        sess.cookies.clear()
+
+        wait = int(cfg["auth"]["post_cookie_clear_wait"])
+        if wait > 0:
+            time.sleep(wait)
+
+        # Login once per session
+        if auth and username and password:
+            try:
+                ok = login(sess, start_url, username, password, login_path)
+                if not ok:
+                    print("[-] Login failed")
+
+            except Exception:
+                continue
+            # Delay to not cause failures
+            time.sleep(0.05 * (i + 1))
+        sessPool.append(sess)
+    return sessPool

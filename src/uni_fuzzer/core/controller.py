@@ -1,11 +1,8 @@
-import requests
-import time
-from requests.adapters import HTTPAdapter
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath, Path
 
-from uni_fuzzer.auth.auth import login
+from uni_fuzzer.auth.auth import login, buildSessions
 from uni_fuzzer.crawler.crawler import Crawler
 from uni_fuzzer.fuzzers.path import PathFuzzer
 from uni_fuzzer.llm.semantic_llm import filterML
@@ -187,35 +184,6 @@ def run(args):
                 loginPath=args.login_path
             )
             endpoints, forms = crawler.crawl(args.start_url)
-            sharedSession = getattr(crawler, "session", None)
-
-            # To resolve HTTP login failures from threads spamming auth set up a pool of logged in sessions shared by threads
-            MAX_WORKERS = int(cfg["concurrency"]["max_workers"])
-            THREADS_PER_SESSION = max(1, int(cfg["concurrency"]["threads_per_session"]))
-            pool = max(1, (MAX_WORKERS + THREADS_PER_SESSION - 1) // THREADS_PER_SESSION)
-
-            sessPool = []
-            for i in range(pool):
-
-                sess = requests.Session()
-                adapter = HTTPAdapter(pool_connections=THREADS_PER_SESSION, pool_maxsize=THREADS_PER_SESSION, max_retries= 0)
-                sess.mount("http://", adapter)
-                sess.mount("https://", adapter)
-                sess.trust_env = False
-
-                # Login once per session (serial, cheap)
-                if args.auth and args.username and args.password:
-                    try:
-                        ok = login(sess, args.start_url, args.username, args.password, args.login_path)
-                        if not ok:
-                            print("[-] Login failed")
-
-                    except Exception:
-                        continue
-                    # Delay to not cause failures
-                    time.sleep(0.05 * (i + 1))
-                sessPool.append(sess)
-
 
             crawlerPrint(endpoints, forms, output_to_file=args.output_to_file, filename="CrawlerOutput.txt")
 
@@ -396,7 +364,10 @@ def run(args):
                         isSilent=True,
                         headless=not args.no_headless,
                         session=sess,
-                        auth=False,
+                        auth=args.auth,
+                        loginUsername=args.username,
+                        loginPassword=args.password,
+                        loginPath=args.login_path
                     )
 
                     # Pass directories of forms/ shared directory endpoints
@@ -485,35 +456,56 @@ def run(args):
 
                 if args.fuzz_paths or args.fuzz_params or args.xss_params:
                     print(f"\n[+] Starting threaded fuzzing on discovered endpoints... \n")
-                    with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
-                        # Run fuzzer using threads across all endpoints assigning a session from the session pool
-                        futures = []
-                        for i, ep in enumerate(phaseEndpoints):
-                            sess = sessPool[i % len(sessPool)]
-                            futures.append(executor.submit(fuzzEndpoint, ep, sess))
+                    sessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path)
+                    try:
+                        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
+                            # Run fuzzer using threads across all endpoints assigning a session from the session pool
+                            futures = []
+                            for i, ep in enumerate(phaseEndpoints):
+                                sess = sessPool[i % len(sessPool)]
+                                futures.append(executor.submit(fuzzEndpoint, ep, sess))
 
-                        for future in as_completed(futures):
-                            results = future.result()
-                            if results:
-                                allVulnerabilities.extend(results)
+                            for future in as_completed(futures):
+                                results = future.result()
+                                if results:
+                                    allVulnerabilities.extend(results)
+                    # Close sessions and delete the pool
+                    finally:
+                        for sess in sessPool:
+                            try:
+                                sess.close()
+                            except Exception:
+                                pass
+                        del sessPool
 
                 if args.xss_forms or args.xss_stored or args.fuzz_sqli or args.fuzz_sqli_b:
                     print(f"\n[+] Starting threaded fuzzing on discovered Forms... \n")
-                    with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
-                        # Run fuzzer using threads across all forms assigning a session from the session pool
-                        futures = []
-                        for i, form in enumerate(forms):
-                            sess = sessPool[i % len(sessPool)]
-                            futures.append(executor.submit(fuzzForm, form, sess))
+                    sessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path)
+                    try:
+                        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
+                            # Run fuzzer using threads across all forms assigning a session from the session pool
+                            futures = []
+                            for i, form in enumerate(forms):
+                                sess = sessPool[i % len(sessPool)]
+                                futures.append(executor.submit(fuzzForm, form, sess))
 
-                        for future in as_completed(futures):
-                            res = future.result()
-                            if res:
-                                allVulnerabilities.extend(res)
+                            for future in as_completed(futures):
+                                res = future.result()
+                                if res:
+                                    allVulnerabilities.extend(res)
+                    # Close sessions and delete the pool
+                    finally:
+                        for sess in sessPool:
+                            try:
+                                sess.close()
+                            except Exception:
+                                pass
+                        del sessPool
 
                 if args.xss_dom:
                     print(f"\n[+] Running Dom XSS on discovered forms/endpoints...\n")
-
+                    domSessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path)
+                    domSess = domSessPool[0] if domSessPool else None
                     fuzzer = XSSFuzzer(
                         baseUrl=args.start_url,
                         useCrawler=False,
@@ -521,7 +513,7 @@ def run(args):
                         outputToFile=args.output_to_file,
                         isSilent=True,
                         headless=not args.no_headless,
-                        session=sharedSession,
+                        session=domSess,
                         auth=args.auth,
                         loginUsername=args.username,
                         loginPassword=args.password,
@@ -538,53 +530,45 @@ def run(args):
 
             # Sequential run for --all
             if getattr(args, "all", False):
+
+                # SQLi blind
+                args.fuzz_sqli_b = True
+                args.fuzz_sqli = args.xss_params = args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_paths = args.fuzz_params = False
+                runPhase()
+
+                # SQLi content
+                args.fuzz_sqli = True
+                args.fuzz_sqli_b = args.xss_params = args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_paths = args.fuzz_params = False
+                runPhase()
+
+                # XSS Stored
+                args.xss_stored = True
+                args.fuzz_sqli = args.fuzz_sqli_b = args.xss_params = args.xss_forms = args.xss_dom = args.fuzz_paths = args.fuzz_params = False
+                runPhase()
+
+                # XSS params
+                args.xss_params = True
+                args.fuzz_sqli = args.fuzz_sqli_b = args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_paths = args.fuzz_params = False
+                runPhase()
+
+                # XSS forms
+                args.xss_forms = True
+                args.fuzz_sqli = args.fuzz_sqli_b = args.xss_params = args.xss_stored = args.xss_dom = args.fuzz_paths = args.fuzz_params = False
+                runPhase()
+
+                # XSS DOM
+                args.xss_dom = True
+                args.fuzz_sqli = args.fuzz_sqli_b = args.xss_params = args.xss_forms = args.xss_stored = args.fuzz_paths = args.fuzz_params = False
+                runPhase()
+
                 # Path traversal
                 args.fuzz_paths = True
                 args.fuzz_params = args.xss_params = args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_sqli = args.fuzz_sqli_b = False
                 runPhase()
 
                 # Param fuzzing
-                args.fuzz_paths = False
                 args.fuzz_params = True
-                args.xss_params = args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_sqli = args.fuzz_sqli_b = False
-                runPhase()
-
-                # XSS params
-                args.fuzz_params = False
-                args.xss_params = True
-                args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_sqli = args.fuzz_sqli_b = False
-                runPhase()
-
-                # XSS forms
-                args.xss_params = False
-                args.xss_forms = True
-                args.xss_stored = False
-                args.xss_dom = args.fuzz_sqli = args.fuzz_sqli_b = False
-                runPhase()
-
-                # XSS Stored
-                args.xss_params = False
-                args.xss_forms = False
-                args.xss_stored = True
-                args.xss_dom = args.fuzz_sqli = args.fuzz_sqli_b = False
-                runPhase()
-
-                # XSS DOM
-                args.xss_forms = False
-                args.xss_stored = False
-                args.xss_dom = True
-                args.fuzz_sqli = args.fuzz_sqli_b = False
-                runPhase()
-
-                # SQLi content
-                args.xss_dom = False
-                args.fuzz_sqli = True
-                args.fuzz_sqli_b = False
-                runPhase()
-
-                # SQLi blind
-                args.fuzz_sqli = False
-                args.fuzz_sqli_b = True
+                args.fuzz_paths = args.xss_params = args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_sqli = args.fuzz_sqli_b = False
                 runPhase()
 
             # Or run normally

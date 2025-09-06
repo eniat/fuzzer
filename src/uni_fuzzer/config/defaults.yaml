@@ -150,6 +150,8 @@ sqli:
   timing_baseline_probes: 3
   timing_payload_trials: 2
   timing_confirm_probes: 2
+  plain_preprobe_min_delta: 1
+  confirm_min_size_delta: 30
   auto_submit_keys:
     - "submit"
     - "btn"
@@ -198,6 +200,7 @@ paths:
 
 auth:
   login_path: "/login"
+  post_cookie_clear_wait: 2
 
   selenium_wait_seconds:
     short: 2

@@ -1,6 +1,7 @@
 import requests
 import threading
 import re
+from html import escape
 from urllib.parse import urlparse, quote, urlencode
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
@@ -114,8 +115,8 @@ def detectSQLiDiff(baseHtml, html, isNotSQLIBlind=True, true= None, false=None, 
         return False
 
     if isNotSQLIBlind:
-        # Check if reflected
-        if (payload and payload.lower() in h) or (payload and payload.lower() in b):
+        esc = escape(str(payload or ""), quote=True).lower()
+        if esc and (esc in h or esc in b):
             return False
 
     if re.search(r"user id (exists|is missing) in the database", h, flags=re.I) \
@@ -136,6 +137,71 @@ def detectSQLiDiff(baseHtml, html, isNotSQLIBlind=True, true= None, false=None, 
 
         if (trH > trB) and (tdH > tdB):
             return True
+
+    delta = abs(len(h) - len(b))
+    if delta >= int(cfg["sqli"]["confirm_min_size_delta"]):
+        return True
+
+    return False
+
+def probeReactivity(session, url, method, fields, fuzzField, headers):
+    """
+        Tests form to see if it is reactionary to avoid irrelevant fuzzing
+    """
+    try:
+        if not fields or not fuzzField:
+            return False
+
+
+        if method == "POST":
+            # Build POST
+            baseData = {f: "1" for f in fields}
+
+            baseRes = session.post(url, data=baseData, headers=headers, timeout=cfg["http"]["timeout_post_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
+            baseBody = baseRes.text or ""
+            baseStatus = baseRes.status_code
+
+            # Flip the 1 to 2
+            data = {f: ("2" if f in fuzzField else "1") for f in fields}
+
+            res = session.post(url, data=data, headers=headers,timeout=cfg["http"]["timeout_post_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
+            body = res.text or ""
+            status = res.status_code
+
+        else:
+            # Build GET
+            baseParams = [f"{f}=1" for f in fields]
+            sep = "&" if "?" in url else "?"
+            baseUrl = f"{url}{sep}{'&'.join(baseParams)}"
+
+            baseRes = session.get(baseUrl, headers=headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
+            baseBody = baseRes.text or ""
+            baseStatus = baseRes.status_code
+
+            # Flip the 1 to 2
+            params = [f"{f}=2" if f in fuzzField else f"{f}=1" for f in fields]
+            fullUrl = f"{url}{sep}{'&'.join(params)}"
+
+            res = session.get(fullUrl,headers=headers,timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
+            body = res.text or ""
+            status = res.status_code
+
+        # Decide if reactive
+        if baseStatus != status:
+            return True
+
+        # Detect difference
+        if detectSQLiDiff(baseBody, body, payload=None):
+            return True
+
+        # Check min change
+        minDelta = int(cfg["sqli"]["plain_preprobe_min_delta"])
+
+        if abs(len((body or "").strip()) - len((baseBody or "").strip())) >= minDelta:
+            return True
+
+    except Exception:
+        pass
 
     return False
 
@@ -311,49 +377,41 @@ class SQLiFuzzer:
                 if not url.startswith("http"):
                     url = f"{parsed.scheme}://{parsed.netloc}{url}"
 
+                fuzzTargets = [f for f in fields if isFuzzableField(f)]
+                if not fuzzTargets:
+                    continue
+
                 # Get a baseline for later comparisons
                 baseText, baseStatus = self.getBaseline(url, method, fields)
 
+                fuzzField = [f for f in fields if isFuzzableField(f)]
+                if not probeReactivity(self.session, url, method, fields, fuzzField, self.headers):
+                    continue
+
                 for raw in self.payloads:
                     payload = raw
-                    if method == "POST":
-                        # POST form fuzzing
-                        data = {}
+                    for target in fuzzTargets:
+                        if method == "POST":
+                            # POST form fuzzing
+                            data = {f: (payload if f == target else "1") for f in fields}
+                            fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_post_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
+                            tasks.append(fut)
+                            ctx[fut] = (url, payload)
 
-                        for field in fields:
-                            # Inject payload into fuzzable fields
-                            if isFuzzableField(field):
-                                data[field] = payload
+                        else:
+                            # GET form fuzzing
+                            params = {f: (payload if f == target else "1") for f in fields}
+                            params = autoSubmits(baseText, params)
 
-                            else:
-                                data[field] = "1"
+                            # Contruct GET requests
+                            logParams = [f"{k}={quote(str(v), safe='')}" for k, v in params.items()]
+                            separator = "&" if "?" in url else "?"
+                            fullUrl = f"{url}{separator}{'&'.join(logParams)}"
 
-                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
+                            fut = executor.submit(self.session.get, url, params =params, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
 
-                        tasks.append(fut)
-                        ctx[fut] = (url, payload)
-
-                    else:
-                        # GET form fuzzing
-                        params = {}
-                        for field in fields:
-                            if isFuzzableField(field):
-                                params[field] = payload
-
-                            else:
-                                params[field] = "1"
-
-                        params = autoSubmits(baseText, params)
-
-                        # Contruct GET requests
-                        logParams = [f"{k}={quote(str(v), safe='')}" for k, v in params.items()]
-                        separator = "&" if "?" in url else "?"
-                        fullUrl = f"{url}{separator}{'&'.join(logParams)}"
-
-                        fut = executor.submit(self.session.get, url, params =params, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
-
-                        tasks.append(fut)
-                        ctx[fut] = (fullUrl, payload)
+                            tasks.append(fut)
+                            ctx[fut] = (fullUrl, payload)
 
                 # collect responses as they finish
                 for fut in as_completed(tasks):
@@ -374,7 +432,7 @@ class SQLiFuzzer:
 
                     if isErr or (status != baseStatus and status >= 400):
                         pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                        resultsKey = (pageKey, (indicator or "status_code_change"), "sqli_potential")
+                        resultsKey = (pageKey, "sql_error", "sqli_potential")
 
                         with self.lock:
                             if resultsKey not in self.vulnerableForms:
@@ -383,7 +441,7 @@ class SQLiFuzzer:
                                     "payload": payload,
                                     "payload_samples": [payload],
                                     "status_code": status,
-                                    "indicator": indicator or "status_code_change",
+                                    "indicator": "sql_error",
                                     "snippet": (body or "")[:200],
                                     "count": 1,
                                     "type": "sqli_potential",
@@ -402,7 +460,7 @@ class SQLiFuzzer:
                         if status != baseStatus or detectSQLiDiff(baseText, body, payload=payload):
 
                             pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                            resultsKey = (pageKey, "detected_sql_content", "sqli")
+                            resultsKey = (pageKey, "detected_sql_content", "sqli_inj")
 
                             with self.lock:
                                 if resultsKey not in self.vulnerableForms:
@@ -414,7 +472,7 @@ class SQLiFuzzer:
                                         "indicator": "detected_sql_content",
                                         "snippet": (body or "")[:200],
                                         "count": 1,
-                                        "type": "sqli",
+                                        "type": "sqli_inj",
                                         "severity": "vulnerable",
                                     }
 
