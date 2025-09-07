@@ -197,6 +197,19 @@ paths:
     - ".py"
     - ".rb"
     - ".zip"
+  sensitive_files:
+    - "web.config"
+    - "config.inc.php"
+    - "config.php"
+    - ".env"
+    - "install.php"
+    - ".git"
+    - ".git/config"
+  collapsible_types:
+    - "path"
+    - "param"
+    - "interesting"
+    - "interesting 200"
 
 auth:
   login_path: "/login"

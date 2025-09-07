@@ -9,7 +9,6 @@ from difflib import SequenceMatcher
 from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import login
-
 from uni_fuzzer.core.utility import get_cfg, loadWordlist
 cfg = get_cfg()
 

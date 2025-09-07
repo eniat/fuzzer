@@ -9,7 +9,7 @@ from uni_fuzzer.llm.semantic_llm import filterML
 from uni_fuzzer.fuzzers.xss import XSSFuzzer
 from uni_fuzzer.fuzzers.sqli import SQLiFuzzer
 from uni_fuzzer.core.reporting import crawlerPrint, fuzzerPrint
-from uni_fuzzer.core.utility import get_cfg, isFuzzableField
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField, collapseDuplicates
 cfg = get_cfg()
 
 WORDLIST_DIR = Path(__file__).resolve().parent.parent / "resources" / "wordlists"
@@ -575,6 +575,7 @@ def run(args):
             else:
                 runPhase()
 
+            allVulnerabilities = collapseDuplicates(allVulnerabilities)
             fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file, filename="FuzzerOutput.txt")
 
 
@@ -597,7 +598,7 @@ def run(args):
                 )
 
                 results = fuzzer.paramXSS()
-
+                allVulnerabilities = collapseDuplicates(results)
                 fuzzerPrint(results, output_to_file=args.output_to_file, filename="FuzzerOutput.txt")
 
             else:
@@ -630,4 +631,5 @@ def run(args):
                 if args.report_all and getattr(fuzzer, "interesting", None):
                     results.extend(fuzzer.interesting)
 
+                allVulnerabilities = collapseDuplicates(results)
                 fuzzerPrint(results, output_to_file=args.output_to_file, filename="FuzzerOutput.txt")

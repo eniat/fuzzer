@@ -586,8 +586,23 @@ class XSSFuzzer:
                     if not ok:
                         continue
 
-                    pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                    resultsKey = (pageKey, (indicator or "N/A"))
+                    # To remove duplicates from different flows
+                    rawKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+                    try:
+                        p = urlparse(rawKey)
+                        scheme = (p.scheme or "").lower()
+                        netloc = (p.netloc or "").lower()
+                        path = p.path or "/"
+
+                        if path != "/" and path.endswith("/"):
+                            path = path.rstrip("/")
+                        pageKey = f"{scheme}://{netloc}{path}"
+
+                    except Exception:
+                        base = finUrl.split("?", 1)[0].split("#", 1)[0]
+                        pageKey = (base.rstrip("/")).lower()
+
+                    resultsKey = (pageKey, (indicator or "N/A"), "xss_stored")
 
                     if resultsKey not in results:
 
