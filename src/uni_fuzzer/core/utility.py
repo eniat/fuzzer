@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import urlparse, unquote
 import yaml
 import posixpath
+import re
 
 @lru_cache(maxsize=1)
 
@@ -149,3 +150,21 @@ def collapseDuplicates(items):
     collapsed = list(groups.values())
 
     return collapsed + passthrough
+
+def autoSubmits(html, params):
+    """
+        If there is a button summits it with the name as the field
+    """
+    cfg = get_cfg()
+    AUTO_SUBMIT_KEYS = cfg["paths"]["auto_submit_keys"]
+
+    if not html:
+        return params
+
+    lowHtml = html.lower()
+    for key in AUTO_SUBMIT_KEYS:
+        if not key:
+            continue
+        if key in lowHtml:
+            params[key.capitalize()] = key.capitalize()
+    return params

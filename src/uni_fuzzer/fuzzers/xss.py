@@ -1,8 +1,7 @@
 import requests
 import re
-import random
 import time
-from urllib.parse import urljoin, urlparse, quote
+from urllib.parse import urljoin, urlparse, quote, unquote_plus
 from uuid import uuid4
 from html import escape, unescape
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,8 +11,9 @@ from requests.cookies import RequestsCookieJar
 from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import seleniumLogin, login
+from uni_fuzzer.core.baseline import baselineForm
 
-from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits
 cfg = get_cfg()
 
 # Regex templates for XSS injections
@@ -109,6 +109,25 @@ def detectXSS(body, token, markedPayload):
         return True, "jsurl_ctx"
 
     return False, None
+
+def probeDom(driver, tokenLow):
+    """
+        Check dom side effects of payloads
+    """
+    try:
+        return driver.execute_script("""
+        const L = s => (s||'').toLowerCase();
+        const t = arguments[0];
+        let gflag = '', ls = '', ss = '';
+        try { gflag = L(window.__XSS_CANARY__); } catch(e){}
+        try { ls = L(JSON.stringify(Object.values(localStorage))); } catch(e){}
+        try { ss = L(JSON.stringify(Object.values(sessionStorage))); } catch(e){}
+        let el = false;
+        try { el = !!document.querySelector(`x-canary[data-t="${t}"]`); } catch(e){}
+        return { gflag: gflag.includes(t), ls: ls.includes(t), ss: ss.includes(t), el };""", tokenLow) or {}
+
+    except Exception:
+        return {}
 
 def probeReflexivity(session, url,method, fields, fuzzField, headers, token):
     """
@@ -375,9 +394,14 @@ class XSSFuzzer:
                 if not probeReflexivity(self.session, url, method, fields, fuzzField, self.headers, self.token):
                     continue
 
+                # Get baseline to check for submit buttons
+                base = baselineForm(self.session, url, self.headers)
+                baseHtml = base["content"]
+
                 if method == "POST":
                     # POST form fuzzing
                     baseD = {f: "test" for f in fields}
+                    baseD = autoSubmits(baseHtml, baseD)
                     for raw, marked, _enc in prebuiltPayloads:
                         data = baseD.copy()
                         for f in fuzzField:
@@ -388,16 +412,18 @@ class XSSFuzzer:
 
                 else:
                     # GET form fuzzing
-                    baseP = [f"{f}=test" for f in fields]
-                    index = {f: i for i, f in enumerate(fields)}
+                    baseP = {f: "test" for f in fields}
+                    baseP = autoSubmits(baseHtml, baseP)
                     separator = "&" if "?" in url else "?"
 
                     for raw, marked, enc in prebuiltPayloads:
-                        params = list(baseP)
+                        params = dict(baseP)
                         for f in fuzzField:
-                            params[index[f]] = f"{f}={enc}"
+                            params[f] = enc
 
-                        fullUrl = f"{url}{separator}{'&'.join(params)}"
+                        logParams = [f"{k}={quote(str(v), safe='')}" for k, v in params.items()]
+                        fullUrl = f"{url}{separator}{'&'.join(logParams)}"
+
                         fut = executor.submit(self.sendRequest, fullUrl, raw, marked, "GET", None)
                         tasks.append(fut)
 
@@ -481,6 +507,10 @@ class XSSFuzzer:
                 # Track the form to potentially revisit
                 pages.add(url)
 
+                # Get baseline to check for submit buttons
+                base = baselineForm(self.session, url, self.headers)
+                baseHtml = base["content"]
+
                 for raw, marked, enc in prebuiltPayloads:
 
                     if method == "POST":
@@ -494,6 +524,7 @@ class XSSFuzzer:
                             else:
                                 data[field] = "test"
 
+                        data = autoSubmits(baseHtml, data)
 
                         fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
 
@@ -502,17 +533,20 @@ class XSSFuzzer:
 
                     else:
                         # GET form fuzzing
-                        params = []
+                        params = {}
 
                         for field in fields:
                             if isFuzzableField(field):
-                                params.append(f"{field}={enc}")
+                                params[field] = enc
 
                             else:
-                                params.append(f"{field}=test")
+                                params[field] = "test"
+
+                        params = autoSubmits(baseHtml, params)
 
                         separator = "&" if "?" in url else "?"
-                        fullUrl = f"{url}{separator}{'&'.join(params)}"
+                        logParams = [f"{k}={quote(str(v), safe='')}" for k, v in params.items()]
+                        fullUrl = f"{url}{separator}{'&'.join(logParams)}"
 
                         fut = executor.submit(self.session.get, fullUrl, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
 
@@ -572,20 +606,17 @@ class XSSFuzzer:
                 except Exception:
                     continue
 
-                body = res.text
-                lowerBody = body.lower()
+                body = res.text or ""
+                low = body.lower()
+                lowU = unescape(body).lower()
+                lowQ = unquote_plus(body).lower()
 
                 # If no token at all continue
-                if self.tokenLow not in lowerBody:
+                if (self.tokenLow not in low) and (self.tokenLow not in lowU) and (self.tokenLow not in lowQ):
                     continue
 
                 # Check if payloads still persists
                 for raw, marked in markedPayloads:
-                    # Check for XSS
-                    ok, indicator = detectXSS(res.text, self.token, marked)
-                    if not ok:
-                        continue
-
                     # To remove duplicates from different flows
                     rawKey = finUrl.split("?", 1)[0].split("#", 1)[0]
                     try:
@@ -602,26 +633,56 @@ class XSSFuzzer:
                         base = finUrl.split("?", 1)[0].split("#", 1)[0]
                         pageKey = (base.rstrip("/")).lower()
 
-                    resultsKey = (pageKey, (indicator or "N/A"), "xss_stored")
+                    ok, indicator = detectXSS(res.text, self.token, marked)
+                    if ok:
+                        resultsKey = (pageKey, (indicator or "N/A"), "xss_stored")
+                        if resultsKey not in results:
+                            results[resultsKey] = {
+                                "url": pageKey,
+                                "payload": raw,
+                                "payload_samples": [raw],
+                                "status_code": res.status_code,
+                                "indicator": indicator,
+                                "snippet": (res.text or "")[:200],
+                                "count": 1,
+                                "type": "xss_stored",
+                            }
+                        else:
+                            entry = results[resultsKey]
+                            entry["count"] += 1
+                            if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                entry["payload_samples"].append(raw)
+                        continue
 
-                    if resultsKey not in results:
+                    # Log XSS stored if the payload is un-sanitised and persists
+                    escPayload = escape(str(marked or ""), quote=True).lower()
+                    escPayloadQ = quote(escPayload, safe="").lower()
 
-                        results[resultsKey] = {
-                            "url": pageKey,
-                            "payload": raw,
-                            "payload_samples": [raw],
-                            "status_code": res.status_code,
-                            "indicator": indicator ,
-                            "snippet": (res.text or "")[:200],
-                            "count": 1,
-                            "type": "xss_stored"
-                        }
-                    else:
-                        entry = results[resultsKey]
-                        entry["count"] += 1
-                        # Cap the examples
-                        if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                            entry["payload_samples"].append(raw)
+                    tokenP = (self.tokenLow in low) or (self.tokenLow in lowU) or (self.tokenLow in lowQ)
+                    payloadEsc = (
+                            (escPayload in low) or (escPayload in lowU) or
+                            (escPayloadQ in low) or (escPayloadQ in lowU) or (escPayloadQ in lowQ)
+                    )
+
+                    if tokenP and not payloadEsc:
+                        indicator = "raw_html_ctx"
+                        resultsKey = (pageKey, indicator, "xss_stored")
+                        if resultsKey not in results:
+                            results[resultsKey] = {
+                                "url": pageKey,
+                                "payload": raw,
+                                "payload_samples": [raw],
+                                "status_code": res.status_code,
+                                "indicator": indicator,
+                                "snippet": (res.text or "")[:200],
+                                "count": 1,
+                                "type": "xss_stored",
+                            }
+                        else:
+                            entry = results[resultsKey]
+                            entry["count"] += 1
+                            if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                                entry["payload_samples"].append(raw)
 
         return list(results.values())
                         # Add break if you just want to see its vulnerable, without lists all successful payloads
@@ -657,7 +718,7 @@ class XSSFuzzer:
 
                 # Try all DOM specific payloads
                 for raw in dom_payloads:
-                    marked = canary(raw, self.token)
+                    marked = raw.replace("{CANARY}", self.token)
                     parts = []
 
                     for field in fields:
@@ -684,7 +745,7 @@ class XSSFuzzer:
 
                 # Try chosen DOM specific payloads
                 for raw in chosenPayloads:
-                    marked = canary(raw,self.token)
+                    marked = raw.replace("{CANARY}", self.token)
                     parts = [f"{p}={quote(marked,safe='')}" for p in params]
                     seperator = "&" if "?" in fullUrl else "?"
                     candidates.append((f"{fullUrl}{seperator}{'&'.join(parts)}", raw, marked))
@@ -707,6 +768,40 @@ class XSSFuzzer:
 
         driver = webdriver.Chrome(options=options)
         try:
+            try:
+                # Extra to match cookies from initial session
+                parse = urlparse(self.baseUrl)
+                origin = f"{parse.scheme}://{parse.netloc}"
+                driver.get(origin)
+
+                for c in self.session.cookies:
+                    name = getattr(c, "name", None)
+                    value = getattr(c, "value", None)
+                    if not name or not value:
+                        continue
+
+                    domain = (getattr(c, "domain", "") or "").lstrip(".")
+                    path = getattr(c, "path", "/") or "/"
+
+                    # only push cookies that match the current origin
+                    if domain and not parse.netloc.endswith(domain):
+                        continue
+
+                    ck = {"name": name, "value": value, "path": path, "domain": domain}
+                    exp = getattr(c, "expires", None)
+
+                    if exp is not None:
+                        try:
+                            ck["expiry"] = int(exp)
+                        except Exception:
+                            pass
+
+                    try:
+                        driver.add_cookie(ck)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             # If selenium login true
             if self.auth and self.loginUsername and self.loginPassword:
 
@@ -744,59 +839,68 @@ class XSSFuzzer:
                 # Normalize the page key
                 pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
 
-                if pageKey in seen:
+                if (pageKey, raw) in seen:
                     # Skip already tested pages
                     continue
-                seen.add(pageKey)
-
-                urlCheck = finUrl
-
-                # pre check with raw http to skip reflected XSS
-                try:
-                    pre = self.session.get(urlCheck, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
-                    pre_body = pre.text or ""
-                except Exception:
-                    pre_body = ""
-
-                reflected = self.token.lower() in pre_body.lower()
-
-                if reflected:
-                    continue
+                seen.add((pageKey, raw))
 
                 try:
                     driver.get(finUrl)
                     # time set in config/defaults
                     time.sleep(cfg["xss"]["dom_delay_seconds"])
-                    body = driver.page_source or ""
 
-                    # Check if DOM XSS worked
-                    if self.tokenLow in body.lower():
-                        # Check for XSS
-                        ok, indicator = detectXSS(body, self.token, marked)
-                        if not ok:
+                    # Check for DOM XSS
+                    flag = probeDom(driver, self.tokenLow)
+
+                    # Add specific indicators
+                    indicator = None
+                    if flag.get("gflag"):
+                        indicator = "dom_global_flag"
+                    elif flag.get("el"):
+                        indicator = "dom_element_ctx"
+                    elif flag.get("ls") or flag.get("ss"):
+                        indicator = "dom_storage"
+
+                    # try retrigger hash based then add indicators
+                    if not indicator:
+                        try:
+                            driver.execute_script("location.hash = arguments[0];", "#" + quote(marked, safe=""))
+                            time.sleep(cfg["xss"]["dom_delay_seconds"])
+                            flag2 = probeDom(driver, self.tokenLow)
+                            if flag2.get("gflag"):
+                                indicator = "dom_global_flag_hash"
+                            elif flag2.get("el"):
+                                indicator = "dom_element_ctx_hash"
+                            elif flag2.get("ls") or flag2.get("ss"):
+                                indicator = "dom_storage_hash"
+                        except Exception:
+                            pass
+
+                        if not indicator:
                             continue
 
-                        pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                        resultsKey = (pageKey, (indicator or "N/A"))
+                    # record result
+                    pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+                    resultsKey = (pageKey, (indicator or "N/A"))
 
-                        if resultsKey not in results:
+                    if resultsKey not in results:
 
-                            results[resultsKey] = {
-                                "url": pageKey,
-                                "payload": raw,
-                                "payload_samples": [raw],
-                                "status_code": 200,
-                                "indicator": indicator ,
-                                "snippet": body[:200],
-                                "count": 1,
-                                "type": "xss_dom"
-                            }
-                        else:
-                            entry = results[resultsKey]
-                            entry["count"] += 1
-                            # Cap the examples
-                            if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                entry["payload_samples"].append(raw)
+                        results[resultsKey] = {
+                            "url": pageKey,
+                            "payload": raw,
+                            "payload_samples": [raw],
+                            "status_code": 200,
+                            "indicator": indicator ,
+                            "snippet": (driver.page_source or "")[:200],
+                            "count": 1,
+                            "type": "xss_dom"
+                        }
+                    else:
+                        entry = results[resultsKey]
+                        entry["count"] += 1
+                        # Cap the examples
+                        if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
+                            entry["payload_samples"].append(raw)
 
                 except Exception:
                     continue

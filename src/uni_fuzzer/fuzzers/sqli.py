@@ -8,7 +8,7 @@ from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import login
 
-from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits
 cfg = get_cfg()
 
 SQL = cfg["sqli"]["error_signatures"]
@@ -27,7 +27,6 @@ TIMING_BASELINE_PROBES = cfg["sqli"]["timing_baseline_probes"]
 TIMING_PAYLOAD_TRIALS  = cfg["sqli"]["timing_payload_trials"]
 TIMING_CONFIRM_PROBES  = cfg["sqli"]["timing_confirm_probes"]
 
-AUTO_SUBMIT_KEYS = cfg["sqli"]["auto_submit_keys"]
 
 def detectSQLError(body):
     """
@@ -60,19 +59,6 @@ def buildBooleanPayloads():
                 wrap.format(cond=false)
             ))
     return payloadPairs
-
-def autoSubmits(html, params):
-    """
-        If there is a button summits it with the name as the field
-    """
-    if not html:
-        return params
-
-    lowHtml = html.lower()
-    for key in AUTO_SUBMIT_KEYS:
-        if key in lowHtml:
-            params[key.capitalize()] = key.capitalize()
-    return params
 
 def detectSQLiBlind(baseMs, testMs, thresholdMs= TIMING_THRESHOLD_MS, factor=BLIND_FACTOR):
     """
@@ -394,6 +380,7 @@ class SQLiFuzzer:
                         if method == "POST":
                             # POST form fuzzing
                             data = {f: (payload if f == target else "1") for f in fields}
+                            data = autoSubmits(baseText, data)
                             fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_post_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
                             tasks.append(fut)
                             ctx[fut] = (url, payload)
@@ -530,6 +517,9 @@ class SQLiFuzzer:
                             else:
                                 dataTrue[field] = "1"
                                 dataFalse[field] = "1"
+
+                        dataTrue = autoSubmits(baseText, dataTrue)
+                        dataFalse = autoSubmits(baseText, dataFalse)
 
                         futTrue = executor.submit( self.session.post, url, data=dataTrue, headers=self.headers,timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
                         futFalse = executor.submit(self.session.post, url, data=dataFalse, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
