@@ -9,6 +9,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from requests.cookies import RequestsCookieJar
 from requests.adapters import HTTPAdapter
+from threading import Lock
 
 from uni_fuzzer.auth.auth import seleniumLogin, login
 from uni_fuzzer.core.baseline import baselineForm
@@ -29,12 +30,16 @@ JS_BLOCKCOM  = re.compile(r"/\*.*?\*/", re.S)
 SCRIPT_BLOCK = re.compile(r"<script[^>]*>(.*?)</script>", re.I | re.S)
 
 # Cache for regex objects to avoid recompiling
-_regex_cache = {}
+_REGEX_CACHE = {}
+
+# To avoid duplicate hits on page visits
+_REPORTED_STORED_KEYS = {}
+reportLock = Lock()
 
 # To exclude SQL errors when looking for XSS
 SQL = cfg["sqli"]["error_signatures"]
 
-dom_payloads = cfg["xss"]["dom_payloads"]
+DOM_PAYLOADS = cfg["xss"]["dom_payloads"]
 
 MAX_SAMPLES_PER_GROUP = cfg["xss"]["max_samples_per_group"]
 
@@ -69,12 +74,12 @@ def detectXSS(body, token, markedPayload):
         return False, None
 
     # cache regex for this token
-    if token not in _regex_cache:
+    if token not in _REGEX_CACHE:
 
-        if len(_regex_cache) >= 32:
-            _regex_cache.clear()
+        if len(_REGEX_CACHE) >= 32:
+            _REGEX_CACHE.clear()
 
-        _regex_cache[token] = (
+        _REGEX_CACHE[token] = (
             re.compile(SCRIPT_RE.format(token=re.escape(token)), re.I | re.S),
             re.compile(ATTR_RE.format(token=re.escape(token)), re.I | re.S),
             re.compile(JSURL_RE.format(token=re.escape(token)), re.I | re.S),
@@ -82,7 +87,7 @@ def detectXSS(body, token, markedPayload):
             re.compile(HTML_COMMENT_RE.format(token=re.escape(token)), re.I | re.S)
         )
 
-    script_re, attr_re, jsurl_re, raw_re, cmt_re = _regex_cache[token]
+    script_re, attr_re, jsurl_re, raw_re, cmt_re = _REGEX_CACHE[token]
 
     # Filter SQL errors
     if any(err.lower() in lowerBody for err in SQL) or any(err.lower() in lowerBodyU for err in SQL):
@@ -662,6 +667,14 @@ class XSSFuzzer:
 
                     ok, indicator = detectXSS(res.text, self.token, marked)
                     if ok:
+                        # Check if reported before
+                        pageInd = (pageKey, indicator or "N/A")
+                        with reportLock:
+                            bucket = _REPORTED_STORED_KEYS.setdefault(self.token, set())
+                            if pageInd in bucket:
+                                continue
+                            bucket.add(pageInd)
+
                         resultsKey = (pageKey, (indicator or "N/A"), "xss_stored")
                         if resultsKey not in results:
                             results[resultsKey] = {
@@ -693,6 +706,15 @@ class XSSFuzzer:
 
                     if tokenP and not payloadEsc:
                         indicator = "raw_html_ctx"
+
+                        # Check if reported before
+                        pageInd = (pageKey, indicator or "N/A")
+                        with reportLock:
+                            bucket = _REPORTED_STORED_KEYS.setdefault(self.token, set())
+                            if pageInd in bucket:
+                                continue
+                            bucket.add(pageInd)
+
                         resultsKey = (pageKey, indicator, "xss_stored")
                         if resultsKey not in results:
                             results[resultsKey] = {
@@ -744,7 +766,7 @@ class XSSFuzzer:
                     url = f"{base}{url}"
 
                 # Try all DOM specific payloads
-                for raw in dom_payloads:
+                for raw in DOM_PAYLOADS:
                     marked = raw.replace("{CANARY}", self.token)
                     parts = []
 
@@ -768,7 +790,7 @@ class XSSFuzzer:
                 fullUrl = rawUrl if rawUrl.startswith("http") else f"{base}{rawUrl}"
 
                 # Randomly sample the dom_payloads to save time
-                chosenPayloads = dom_payloads
+                chosenPayloads = DOM_PAYLOADS
 
                 # Try chosen DOM specific payloads
                 for raw in chosenPayloads:

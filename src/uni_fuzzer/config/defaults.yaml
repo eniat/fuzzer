@@ -52,6 +52,7 @@ fuzz:
     - security
     - upload
     - change
+    - login
     - max_file_size
     - step
     - create_db
