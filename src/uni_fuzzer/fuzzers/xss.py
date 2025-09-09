@@ -20,6 +20,8 @@ cfg = get_cfg()
 SCRIPT_RE = cfg["xss"]["regex"]["script"]
 ATTR_RE   = cfg["xss"]["regex"]["attr"]
 JSURL_RE  = cfg["xss"]["regex"]["jsurl"]
+RAW_HTML_RE = cfg["xss"]["regex"]["raw_html"]
+HTML_COMMENT_RE = cfg["xss"]["regex"]["html_comment"]
 
 JS_STRINGS   = re.compile(r"""(['"])(?:\\.|(?!\1).)*\1""", re.S)
 JS_LINECOM   = re.compile(r"//[^\n\r]*")
@@ -40,6 +42,17 @@ def canary(payload, token):
     """
         Append payload with unique token
     """
+    s = (payload or "").strip()
+    # Javascript
+    if s.lower().startswith("javascript:") or s.lower().startswith("<script") or "eval(" in s or "alert(" in s:
+        return f'{payload};window.__XSS_CANARY__="{token}";'
+
+    # HTML tag
+    if s.startswith("<") and s.endswith(">"):
+        i = payload.rfind(">")
+        if i != -1:
+            return payload[:i] + f' data-canary="{token}"' + payload[i:]
+
     return f"{payload}{token}"
 
 
@@ -49,16 +62,10 @@ def detectXSS(body, token, markedPayload):
     """
     lowerBody = (body or "").lower()
     token = (token or "").lower()
-
+    lowerBodyQ = unquote_plus(body).lower()
     lowerBodyU = unescape(body or "").lower()
 
-    if token not in lowerBody and token not in lowerBodyU:
-        return False, None
-
-    # If only payload appears its usually safe
-    escPayload = escape(str(markedPayload or ""), quote=True).lower()
-
-    if escPayload in lowerBody or escPayload in lowerBodyU:
+    if token not in lowerBody and token not in lowerBodyU and token not in lowerBodyQ:
         return False, None
 
     # cache regex for this token
@@ -70,10 +77,12 @@ def detectXSS(body, token, markedPayload):
         _regex_cache[token] = (
             re.compile(SCRIPT_RE.format(token=re.escape(token)), re.I | re.S),
             re.compile(ATTR_RE.format(token=re.escape(token)), re.I | re.S),
-            re.compile(JSURL_RE.format(token=re.escape(token)), re.I | re.S)
+            re.compile(JSURL_RE.format(token=re.escape(token)), re.I | re.S),
+            re.compile(RAW_HTML_RE.format(token=re.escape(token)), re.I | re.S),
+            re.compile(HTML_COMMENT_RE.format(token=re.escape(token)), re.I | re.S)
         )
 
-    script_re, attr_re, jsurl_re = _regex_cache[token]
+    script_re, attr_re, jsurl_re, raw_re, cmt_re = _regex_cache[token]
 
     # Filter SQL errors
     if any(err.lower() in lowerBody for err in SQL) or any(err.lower() in lowerBodyU for err in SQL):
@@ -98,15 +107,24 @@ def detectXSS(body, token, markedPayload):
                 return True, "script_ctx"
 
     # Check if xss is in dangerous contexts
-    if attr_re.search(lowerBodyU):
+    if attr_re.search(lowerBodyU) or jsurl_re.search(lowerBodyU):
         return True, "attr_ctx"
-    if jsurl_re.search(lowerBodyU):
-        return True, "jsurl_ctx"
+    if attr_re.search(lowerBody) or jsurl_re.search(lowerBody):
+        return True, "attr_ctx"
+    if raw_re.search(body) or raw_re.search(lowerBodyU) or raw_re.search(lowerBodyQ) or \
+            cmt_re.search(body) or cmt_re.search(lowerBodyU) or cmt_re.search(lowerBodyQ):
+        return True, "raw_html_ctx"
 
-    if attr_re.search(lowerBody):
-        return True, "attr_ctx"
-    if jsurl_re.search(lowerBody):
-        return True, "jsurl_ctx"
+    if markedPayload:
+        mp = str(markedPayload)
+        mpHtml = escape(mp, quote=True).lower()
+        mpUrl = quote(mp, safe="").lower()
+        mpUrlp = quote(mp, safe="").replace("%20", "+").lower()
+
+        if (mpHtml and (mpHtml in lowerBody or mpHtml in lowerBodyU)) or \
+                (mpUrl and (mpUrl in lowerBody or mpUrl in lowerBodyU or mpUrl in lowerBodyQ)) or \
+                (mpUrlp and (mpUrlp in lowerBody or mpUrlp in lowerBodyU or mpUrlp in lowerBodyQ)):
+            return True, "raw_html_ctx"
 
     return False, None
 
@@ -160,14 +178,14 @@ def probeReflexivity(session, url,method, fields, fuzzField, headers, token):
 
 class XSSFuzzer:
 
-    def __init__(self, baseUrl, useCrawler = False, outputToFile= False, wordlistPath=None, isSilent=False, headless= True, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False):
+    def __init__(self, baseUrl, useCrawler = False, outputToFile= False, wordlistPath=None, isSilent=False, headless= True, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False, token= None):
         self.baseUrl = baseUrl
         self.useCrawler = useCrawler
         self.wordlistPath = wordlistPath
         self.outputToFile = outputToFile
         self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.isSilent = isSilent
-        self.token = f"XSSCanary-{uuid4().hex[:8]}"
+        self.token = token or f"XSSCanary-{uuid4().hex[:8]}"
         self.headless = headless
 
         self.tokenLow = self.token.lower()
@@ -563,6 +581,15 @@ class XSSFuzzer:
 
                     finUrl, raw, marked = ctx[fut]
 
+                    # Add final URL to revisit list
+                    try:
+                        if getattr(res, "url", None):
+                            pages.add(res.url)
+                    except Exception:
+                        pass
+
+                    pages.add(finUrl)
+
                     # Follow redirections after submitting form
                     if res.status_code in (301, 302, 303,307, 308):
                         loc = res.headers.get("Location")
@@ -861,6 +888,13 @@ class XSSFuzzer:
                     elif flag.get("ls") or flag.get("ss"):
                         indicator = "dom_storage"
 
+                    # To resolve false positives for dom_storage
+                    if indicator == "dom_storage":
+                        src = driver.page_source or ""
+                        ok, _ = detectXSS(src, self.token, self.token)
+                        if not ok:
+                            continue
+
                     # try retrigger hash based then add indicators
                     if not indicator:
                         try:
@@ -873,6 +907,14 @@ class XSSFuzzer:
                                 indicator = "dom_element_ctx_hash"
                             elif flag2.get("ls") or flag2.get("ss"):
                                 indicator = "dom_storage_hash"
+
+                            # To resolve false positives for dom_storage
+                            if indicator == "dom_storage_hash":
+                                src = driver.page_source or ""
+                                ok, _ = detectXSS(src, self.token, self.token)
+                                if not ok:
+                                    continue
+
                         except Exception:
                             pass
 

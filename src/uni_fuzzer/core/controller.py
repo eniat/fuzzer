@@ -1,6 +1,7 @@
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath, Path
+from uuid import uuid4
 
 from uni_fuzzer.auth.auth import login, buildSessions
 from uni_fuzzer.crawler.crawler import Crawler
@@ -169,6 +170,7 @@ def run(args):
             globalVisitedFuzzPaths = set()
 
             allVulnerabilities = []
+            runToken = f"XSSCanary-{uuid4().hex[:8]}"
 
             print("\n[+] Using crawler to discover endpoints and forms...")
 
@@ -316,6 +318,7 @@ def run(args):
                         headless=not args.no_headless,
                         session=sess,
                         auth=False,
+                        token=runToken
                     )
 
                     res = fuzzer.paramXSS()
@@ -345,6 +348,7 @@ def run(args):
                         headless=not args.no_headless,
                         session=sess,
                         auth=False,
+                        token=runToken
                     )
 
                     res = fuzzer.formXSS([form])
@@ -364,10 +368,11 @@ def run(args):
                         isSilent=True,
                         headless=not args.no_headless,
                         session=sess,
-                        auth=args.auth,
+                        auth=False,
                         loginUsername=args.username,
                         loginPassword=args.password,
-                        loginPath=args.login_path
+                        loginPath=args.login_path,
+                        token=runToken
                     )
 
                     # Pass directories of forms/ shared directory endpoints
@@ -517,7 +522,8 @@ def run(args):
                         auth=args.auth,
                         loginUsername=args.username,
                         loginPassword=args.password,
-                        loginPath=args.login_path
+                        loginPath=args.login_path,
+                        token=runToken
                     )
 
                     res = fuzzer.domXSS(forms=rawDomForms, endpoints=endpoints)
@@ -541,11 +547,6 @@ def run(args):
                 args.fuzz_sqli_b = args.xss_params = args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_paths = args.fuzz_params = False
                 runPhase()
 
-                # XSS Stored
-                args.xss_stored = True
-                args.fuzz_sqli = args.fuzz_sqli_b = args.xss_params = args.xss_forms = args.xss_dom = args.fuzz_paths = args.fuzz_params = False
-                runPhase()
-
                 # XSS params
                 args.xss_params = True
                 args.fuzz_sqli = args.fuzz_sqli_b = args.xss_forms = args.xss_stored = args.xss_dom = args.fuzz_paths = args.fuzz_params = False
@@ -559,6 +560,11 @@ def run(args):
                 # XSS DOM
                 args.xss_dom = True
                 args.fuzz_sqli = args.fuzz_sqli_b = args.xss_params = args.xss_forms = args.xss_stored = args.fuzz_paths = args.fuzz_params = False
+                runPhase()
+
+                # XSS Stored
+                args.xss_stored = True
+                args.fuzz_sqli = args.fuzz_sqli_b = args.xss_params = args.xss_forms = args.xss_dom = args.fuzz_paths = args.fuzz_params = False
                 runPhase()
 
                 # Path traversal

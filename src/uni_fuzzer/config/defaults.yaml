@@ -50,7 +50,6 @@ fuzz:
   skipped_fields:
     - user_token
     - security
-    - login
     - upload
     - change
     - max_file_size
@@ -110,6 +109,8 @@ xss:
     script: "<script[^>]*>(?:(?!</script>).)*({token})(?:(?!</script>).)*</script>"
     attr: "\\bon\\w+\\s*=\\s*(['\\\"]).*?({token}).*?\\1"
     jsurl: "(?:href|src)\\s*=\\s*(['\\\"])\\s*javascript:.*?({token}).*?\\1"
+    html_comment: "<!--(?:(?!-->).)*{token}(?:(?!-->).)*-->"
+    raw_html: "(?:^|>)[^<]*{token}[^<]*(?:<|$)"
   max_samples_per_group: 3
 
 sqli:
