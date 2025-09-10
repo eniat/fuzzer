@@ -668,7 +668,7 @@ class XSSFuzzer:
                     ok, indicator = detectXSS(res.text, self.token, marked)
                     if ok:
                         # Check if reported before
-                        pageInd = (pageKey, indicator or "N/A")
+                        pageInd = (pageKey, indicator or "N/A", marked)
                         with reportLock:
                             bucket = _REPORTED_STORED_KEYS.setdefault(self.token, set())
                             if pageInd in bucket:
@@ -676,46 +676,6 @@ class XSSFuzzer:
                             bucket.add(pageInd)
 
                         resultsKey = (pageKey, (indicator or "N/A"), "xss_stored")
-                        if resultsKey not in results:
-                            results[resultsKey] = {
-                                "url": pageKey,
-                                "payload": raw,
-                                "payload_samples": [raw],
-                                "status_code": res.status_code,
-                                "indicator": indicator,
-                                "snippet": (res.text or "")[:200],
-                                "count": 1,
-                                "type": "xss_stored",
-                            }
-                        else:
-                            entry = results[resultsKey]
-                            entry["count"] += 1
-                            if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                entry["payload_samples"].append(raw)
-                        continue
-
-                    # Log XSS stored if the payload is un-sanitised and persists
-                    escPayload = escape(str(marked or ""), quote=True).lower()
-                    escPayloadQ = quote(escPayload, safe="").lower()
-
-                    tokenP = (self.tokenLow in low) or (self.tokenLow in lowU) or (self.tokenLow in lowQ)
-                    payloadEsc = (
-                            (escPayload in low) or (escPayload in lowU) or
-                            (escPayloadQ in low) or (escPayloadQ in lowU) or (escPayloadQ in lowQ)
-                    )
-
-                    if tokenP and not payloadEsc:
-                        indicator = "raw_html_ctx"
-
-                        # Check if reported before
-                        pageInd = (pageKey, indicator or "N/A")
-                        with reportLock:
-                            bucket = _REPORTED_STORED_KEYS.setdefault(self.token, set())
-                            if pageInd in bucket:
-                                continue
-                            bucket.add(pageInd)
-
-                        resultsKey = (pageKey, indicator, "xss_stored")
                         if resultsKey not in results:
                             results[resultsKey] = {
                                 "url": pageKey,
