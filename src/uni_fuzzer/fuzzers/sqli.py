@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import login
-
+from uni_fuzzer.core.baseline import sqliBaseline, getBlindBaseline
 from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits
 cfg = get_cfg()
 
@@ -23,7 +23,6 @@ BOOLEAN_FALSE = cfg["sqli"]["boolean_false"]
 BOOLEAN_WRAPPERS = cfg["sqli"]["boolean_wrappers"]
 BOOLEAN_SUCCESS_KEYWORDS = cfg["sqli"]["boolean_success_keywords"]
 BOOLEAN_FAILURE_KEYWORDS = cfg["sqli"]["boolean_failure_keywords"]
-TIMING_BASELINE_PROBES = cfg["sqli"]["timing_baseline_probes"]
 TIMING_PAYLOAD_TRIALS  = cfg["sqli"]["timing_payload_trials"]
 TIMING_CONFIRM_PROBES  = cfg["sqli"]["timing_confirm_probes"]
 
@@ -228,116 +227,6 @@ class SQLiFuzzer:
             if not ok:
                 print("[-] HTTP login in SQLi Fuzzer failed")
 
-    def getBaseline(self, endpoint, method, fields):
-        """
-            Get baseline to compare if SQLi worked
-        """
-        try:
-            if method == "POST":
-                baseData = {f: "1" for f in fields}
-
-                res = self.session.post(
-                    endpoint,
-                    data=baseData,
-                    headers=self.headers,
-                    timeout=cfg["sqli"]["timeout_blind"],
-                    allow_redirects=cfg["http"]["redirects"]["baseline_post"]
-                )
-
-                baseText, baseStatus = res.text or "", res.status_code
-
-            else:
-                res = self.session.get(
-                    endpoint,
-                    headers=self.headers,
-                    timeout=cfg["sqli"]["timeout_blind"],
-                    allow_redirects=cfg["http"]["redirects"]["baseline_get"]
-                )
-
-                html = res.text or ""
-
-                params = {f: "1" for f in fields}
-                params = autoSubmits(html, params)
-
-                res = self.session.get(
-                    endpoint,
-                    params=params,
-                    headers=self.headers,
-                    timeout=cfg["sqli"]["timeout_blind"],
-                    allow_redirects=cfg["http"]["redirects"]["baseline_get"]
-                )
-
-                baseText, baseStatus = res.text or "", res.status_code
-
-            return baseText, baseStatus
-
-        except Exception:
-            return "",0
-
-    def getBlindBaseline(self, endpoint, method, fields, probes=TIMING_BASELINE_PROBES):
-        """
-            Get time baseline for blind SQLi timing
-        """
-        try:
-            elapses = []
-
-            if method == "POST":
-                res = self.session.post(
-                    endpoint,
-                    headers=self.headers,
-                    timeout=cfg["sqli"]["timeout_blind"],
-                    allow_redirects=cfg["http"]["redirects"]["baseline_post"]
-                )
-
-                html = res.text or ""
-
-                baseData = {f: "1" for f in fields}
-                baseData = autoSubmits(html, baseData)
-
-                for _ in range(max(1, int(probes))):
-                    res = self.session.post(
-                        endpoint,
-                        data=baseData,
-                        headers=self.headers,
-                        timeout=cfg["sqli"]["timeout_blind"],
-                        allow_redirects=cfg["http"]["redirects"]["baseline_post"]
-                    )
-                    elapses.append(res.elapsed.total_seconds() * 1000.0)
-
-
-            else:
-                res = self.session.get(
-                    endpoint,
-                    headers=self.headers,
-                    timeout=cfg["sqli"]["timeout_blind"],
-                    allow_redirects=cfg["http"]["redirects"]["baseline_get"]
-                )
-
-                html = res.text or ""
-
-                params = {f: "1" for f in fields}
-                params = autoSubmits(html, params)
-
-                for _ in range(max(1, int(probes))):
-                    res = self.session.get(
-                        endpoint,
-                        params=params,
-                        headers=self.headers,
-                        timeout=cfg["sqli"]["timeout_blind"],
-                        allow_redirects=cfg["http"]["redirects"]["baseline_get"]
-                    )
-                    elapses.append(res.elapsed.total_seconds() * 1000.0)
-
-            if not elapses:
-                return 0.0
-
-            elapses.sort()
-            mid = len(elapses) //2
-            return elapses[mid] if len(elapses) %2 == 1 else (elapses[mid - 1] + elapses[mid]) /2.0
-
-        except Exception:
-            return 0.0
-
     def SQLiFuzz(self, forms):
         """
             Takes the forms retrieved by the crawler and fuzzes them for SQLi vulnerabilities
@@ -368,7 +257,7 @@ class SQLiFuzzer:
                     continue
 
                 # Get a baseline for later comparisons
-                baseText, baseStatus = self.getBaseline(url, method, fields)
+                baseText, baseStatus = sqliBaseline(self.session, self.headers,url, method, fields)
 
                 fuzzField = [f for f in fields if isFuzzableField(f)]
                 if not probeReactivity(self.session, url, method, fields, fuzzField, self.headers):
@@ -499,7 +388,7 @@ class SQLiFuzzer:
                     url = f"{parsed.scheme}://{parsed.netloc}{url}"
 
                 # Get a baseline for later comparisons
-                baseText, baseStatus = self.getBaseline(url, method, fields)
+                baseText, baseStatus = sqliBaseline(self.session, self.headers, url, method, fields)
 
                 for trueCond, falseCond in boolPairs:
                     pairId = f"{trueCond}|||{falseCond}"
@@ -627,7 +516,7 @@ class SQLiFuzzer:
                                         entry["payload_samples"].append(payloadUsed)
 
                 # Sequentially fuzz for blind timing
-                baselineMs = self.getBlindBaseline(url, method, fields)
+                baselineMs = getBlindBaseline(self.session, self.headers,url, method, fields)
                 if baselineMs > 0.0:
                     confirmJobs = []
                     for raw in self.payloads:
@@ -700,7 +589,7 @@ class SQLiFuzzer:
                     if confirmJobs:
                         with self.confirmLock:
 
-                            confirmBaseMs = self.getBlindBaseline(url, method, fields,probes=TIMING_CONFIRM_PROBES) or baselineMs
+                            confirmBaseMs = getBlindBaseline(self.session, self.headers, url, method, fields,probes=TIMING_CONFIRM_PROBES) or baselineMs
 
                             for (target, payload) in confirmJobs:
                                 try:

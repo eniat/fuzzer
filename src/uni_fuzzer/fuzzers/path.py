@@ -8,6 +8,7 @@ from difflib import SequenceMatcher
 
 from requests.adapters import HTTPAdapter
 
+from uni_fuzzer.core.baseline import getBaseline
 from uni_fuzzer.auth.auth import login
 from uni_fuzzer.core.utility import get_cfg, loadWordlist
 cfg = get_cfg()
@@ -59,7 +60,7 @@ class PathFuzzer:
             if not ok :
                 print("[-] HTTP login in PathFuzzer failed")
 
-        self.baseline = self.getBaseline()
+        self.baseline = getBaseline(self.session, baseUrl, self.headers)
 
 
     def isPathTraversalSuccess(self, response, url):
@@ -288,21 +289,3 @@ class PathFuzzer:
         grouped = [v for (k_url, k_ind, k_kind), v in self.vulnerablePaths.items() if k_kind == "param"]
         return grouped
 
-
-    def getBaseline(self):
-        """
-            Help path fuzzing with false positives
-        """
-        testPath = cfg["fuzz"]["baseline_404_path"]
-        testUrl = urljoin(self.baseUrl, testPath)
-
-        try:
-            res = self.session.get(testUrl, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["baseline_get"])
-            return {
-                "status_code": res.status_code,
-                "content": res.text
-            }
-        except Exception as e:
-            if not self.isSilent:
-                print( f"[!] Could not get baseline signature:{e}")
-            return None
