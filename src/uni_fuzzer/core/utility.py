@@ -1,10 +1,9 @@
 from __future__ import annotations
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse, unquote
 import yaml
 import posixpath
-import re
 
 @lru_cache(maxsize=1)
 
@@ -168,3 +167,63 @@ def autoSubmits(html, params):
         if key in lowHtml:
             params[key.capitalize()] = key.capitalize()
     return params
+
+WORDLIST_DIR = Path(__file__).resolve().parent.parent / "resources" / "wordlists"
+
+def sortWordlist(name):
+    """
+        Allows wordlist to be passed by name as well as full file location
+    """
+    # if it's a path that's valid return path
+    p = Path(name)
+    if p.exists():
+        return p
+
+    # Check resources/wordlists by short name
+    candidate = WORDLIST_DIR / f"{name}.txt"
+    if candidate.exists():
+        return candidate
+
+    raise FileNotFoundError(f"Wordlist '{name}' not found in {WORDLIST_DIR}")
+
+def getDirectories(path):
+    """
+        Helper for stripping filenames and only leaving directories
+    """
+
+    cfg = get_cfg()
+
+    exts = tuple(cfg.get("paths", {}).get("file_extensions", [
+        ".php", ".html", ".asp", ".aspx", ".jsp", ".py", ".rb", ".zip"
+    ]))
+
+    segments = path.rstrip("/").split("/")
+
+    if segments and any(segments[-1].lower().endswith(ext) for ext in exts):
+        segments = segments[:-1]
+
+    baseDir = "/" + "/".join(segments) if segments else "/"
+    return str(PurePosixPath(baseDir))
+
+def getParents(path):
+    """
+        Gets the parents of the given URL
+    """
+    p = PurePosixPath(urlparse(path).path or "/")
+
+    chain = []
+    for parent in p.parents:
+        if str(parent) != ".":
+            chain.append(str(parent) if str(parent).startswith("/") else f"/{parent}")
+
+    chain.append(str(p) if str(p).startswith("/") else f"/{p}")
+
+    # normalize and dedupe
+    seen, out = set(), []
+
+    for x in chain:
+        n = str(PurePosixPath(x)).rstrip("/") or "/"
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out

@@ -1,75 +1,18 @@
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import PurePosixPath, Path
+from pathlib import PurePosixPath
 from uuid import uuid4
 
-from uni_fuzzer.auth.auth import login, buildSessions
+from uni_fuzzer.auth.auth import buildSessions
 from uni_fuzzer.crawler.crawler import Crawler
 from uni_fuzzer.fuzzers.path import PathFuzzer
 from uni_fuzzer.llm.semantic_llm import filterML
 from uni_fuzzer.fuzzers.xss import XSSFuzzer
 from uni_fuzzer.fuzzers.sqli import SQLiFuzzer
 from uni_fuzzer.core.reporting import crawlerPrint, fuzzerPrint
-from uni_fuzzer.core.utility import get_cfg, isFuzzableField, collapseDuplicates
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField, collapseDuplicates, sortWordlist, getDirectories, getParents
 cfg = get_cfg()
 
-WORDLIST_DIR = Path(__file__).resolve().parent.parent / "resources" / "wordlists"
-
-def sortWordlist(name):
-    """
-        Allows wordlist to be passed by name as well as full file location
-    """
-    # if it's a path that's valid return path
-    p = Path(name)
-    if p.exists():
-        return p
-
-    # Check resources/wordlists by short name
-    candidate = WORDLIST_DIR / f"{name}.txt"
-    if candidate.exists():
-        return candidate
-
-    raise FileNotFoundError(f"Wordlist '{name}' not found in {WORDLIST_DIR}")
-
-def getdirectories(path):
-    """
-        Helper for stripping filenames and only leaving directories
-    """
-
-    exts = tuple(cfg.get("paths", {}).get("file_extensions", [
-        ".php", ".html", ".asp", ".aspx", ".jsp", ".py", ".rb", ".zip"
-    ]))
-
-    segments = path.rstrip("/").split("/")
-
-    if segments and any(segments[-1].lower().endswith(ext) for ext in exts):
-        segments = segments[:-1]
-
-    baseDir = "/" + "/".join(segments) if segments else "/"
-    return str(PurePosixPath(baseDir))
-
-def getParents(path):
-    """
-        Gets the parents of the given URL
-    """
-    p = PurePosixPath(urlparse(path).path or "/")
-
-    chain = []
-    for parent in p.parents:
-        if str(parent) != ".":
-            chain.append(str(parent) if str(parent).startswith("/") else f"/{parent}")
-
-    chain.append(str(p) if str(p).startswith("/") else f"/{p}")
-
-    # normalize and dedupe
-    seen, out = set(), []
-
-    for x in chain:
-        n = str(PurePosixPath(x)).rstrip("/") or "/"
-        if n not in seen:
-            seen.add(n)
-            out.append(n)
-    return out
 
 def run(args):
 
@@ -92,7 +35,7 @@ def run(args):
     else:
         sWordlist = None
 
-    # Checks if wordlist given or fallsback to base
+    # Checks if wordlist given or falls back to base
     wordlistPathsParams = pWordlist or args.wordlist
     wordlistXss = xWordlist or args.wordlist
     wordlistSqli = sWordlist or args.wordlist
@@ -211,7 +154,7 @@ def run(args):
                 uniqueUrls = {}
                 for ep in endpoints:
                     parsedPath = urlparse(ep["url"]).path or "/"
-                    baseDir = str(PurePosixPath(getdirectories(parsedPath))).rstrip("/")
+                    baseDir = str(PurePosixPath(getDirectories(parsedPath))).rstrip("/")
 
                     if baseDir not in uniqueUrls:
                         uniqueUrls[baseDir] = ep
@@ -223,7 +166,7 @@ def run(args):
             #  Add to visited directories
             for ep in UniqueEndpoints:
                 p = urlparse(ep["url"]).path or "/"
-                d = getdirectories(p)
+                d = getDirectories(p)
                 globalVisitedPaths.add(d)
 
             print(f"[+] Beginning fuzzing... \n")
@@ -376,11 +319,11 @@ def run(args):
                     )
 
                     # Pass directories of forms/ shared directory endpoints
-                    formDir = getdirectories(urlparse(fullUrl).path)
+                    formDir = getDirectories(urlparse(fullUrl).path)
                     relevantEndpoints = [
                         ep["url"] if ep["url"].startswith("http") else urljoin(base, ep["url"])
                         for ep in endpoints
-                        if getdirectories(urlparse(ep["url"]).path) == formDir
+                        if getDirectories(urlparse(ep["url"]).path) == formDir
                     ]
 
                     res = fuzzer.storedXSS([form], endpoints=relevantEndpoints)
@@ -445,7 +388,7 @@ def run(args):
 
                     for ep in endpoints:
                         parsedPath = urlparse(ep["url"]).path or "/"
-                        baseDir = str(PurePosixPath(getdirectories(parsedPath))).rstrip("/")
+                        baseDir = str(PurePosixPath(getDirectories(parsedPath))).rstrip("/")
 
                         if baseDir not in uniqueUrls:
                             uniqueUrls[baseDir] = ep
@@ -456,7 +399,7 @@ def run(args):
                 # Update visited
                 for ep in phaseEndpoints:
                     p = urlparse(ep["url"]).path or "/"
-                    d = getdirectories(p)
+                    d = getDirectories(p)
                     globalVisitedPaths.add(d)
 
                 if args.fuzz_paths or args.fuzz_params or args.xss_params:
