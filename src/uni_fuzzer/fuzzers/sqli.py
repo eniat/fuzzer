@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import login
+from uni_fuzzer.fuzzers.detection import detectSQLiBlind, detectSQLiDiff, detectSQLError
 from uni_fuzzer.core.baseline import sqliBaseline, getBlindBaseline
 from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits
 cfg = get_cfg()
@@ -21,23 +22,8 @@ BLIND_TIME = cfg["sqli"]["blind_time"]
 BOOLEAN_TRUE  = cfg["sqli"]["boolean_true"]
 BOOLEAN_FALSE = cfg["sqli"]["boolean_false"]
 BOOLEAN_WRAPPERS = cfg["sqli"]["boolean_wrappers"]
-BOOLEAN_SUCCESS_KEYWORDS = cfg["sqli"]["boolean_success_keywords"]
-BOOLEAN_FAILURE_KEYWORDS = cfg["sqli"]["boolean_failure_keywords"]
 TIMING_PAYLOAD_TRIALS  = cfg["sqli"]["timing_payload_trials"]
 TIMING_CONFIRM_PROBES  = cfg["sqli"]["timing_confirm_probes"]
-
-
-def detectSQLError(body):
-    """
-        Detects SQL errors which highlights potential vulnerabilities
-    """
-    lower = (body or "").lower()
-
-    for err in SQL:
-        if err in lower:
-            return True, err
-
-    return False, None
 
 def isBlindPayload (payload):
     """
@@ -59,75 +45,11 @@ def buildBooleanPayloads():
             ))
     return payloadPairs
 
-def detectSQLiBlind(baseMs, testMs, thresholdMs= TIMING_THRESHOLD_MS, factor=BLIND_FACTOR):
-    """
-        Detects SQLi blind by checking timing difference
-    """
-    if testMs <= 0 or baseMs <= 0:
-        return False
-    return (testMs >= baseMs * factor) and ((testMs - baseMs) >= thresholdMs)
-
 def expandTimeToken(payload, seconds=BLIND_TIME):
     """
         Replaces __TIME__ in payload strings with the configured number of seconds
     """
     return (payload or "").replace("__TIME__", str(seconds))
-
-def detectSQLiDiff(baseHtml, html, isNotSQLIBlind=True, true= None, false=None, payload=None):
-    """
-        Detect SQLi content by comparing the basehtml with the html after and assessing differences/
-        Detect blind SQLi by checking two word lists
-    """
-    b = (baseHtml or "").lower()
-    h = (html or "").lower()
-
-    if not isNotSQLIBlind:
-        # Check if payloads are reflected
-        if (true and true.lower() in h) or (true and true.lower() in b):
-            return False
-        if (false and false.lower() in h) or (false and false.lower() in b):
-            return False
-
-        hasSuccB = any(s in b for s in BOOLEAN_SUCCESS_KEYWORDS)
-        hasFailB = any(f in b for f in BOOLEAN_FAILURE_KEYWORDS)
-        hasSuccH = any(s in h for s in BOOLEAN_SUCCESS_KEYWORDS)
-        hasFailH = any(f in h for f in BOOLEAN_FAILURE_KEYWORDS)
-
-        # True page shows success whilst other shows fail or opposite
-        if (hasSuccB and hasFailH) or (hasFailB and hasSuccH):
-            return True
-
-        return False
-
-    if isNotSQLIBlind:
-        esc = escape(str(payload or ""), quote=True).lower()
-        if esc and (esc in h or esc in b):
-            return False
-
-    if re.search(r"user id (exists|is missing) in the database", h, flags=re.I) \
-            and not re.search(r"user id (exists|is missing) in the database", b, flags=re.I):
-        return False
-
-    preB, preH = b.count("<pre"), h.count("<pre")
-    trB, trH = b.count("<tr"), h.count("<tr")
-    tdB, tdH = b.count("<td"), h.count("<td")
-
-    Pres = (preH - preB) >= 2
-    Tabs = (trH - trB) >= 2 and (tdH - tdB) >= 2
-
-    if Pres or Tabs:
-
-        if Pres:
-            return True
-
-        if (trH > trB) and (tdH > tdB):
-            return True
-
-    delta = abs(len(h) - len(b))
-    if delta >= int(cfg["sqli"]["confirm_min_size_delta"]):
-        return True
-
-    return False
 
 def probeReactivity(session, url, method, fields, fuzzField, headers):
     """

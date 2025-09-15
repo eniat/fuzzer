@@ -13,31 +13,14 @@ from threading import Lock
 
 from uni_fuzzer.auth.auth import seleniumLogin, login
 from uni_fuzzer.core.baseline import baselineForm
+from uni_fuzzer.fuzzers.detection import detectXSS
 
 from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits
 cfg = get_cfg()
 
-# Regex templates for XSS injections
-SCRIPT_RE = cfg["xss"]["regex"]["script"]
-ATTR_RE   = cfg["xss"]["regex"]["attr"]
-JSURL_RE  = cfg["xss"]["regex"]["jsurl"]
-RAW_HTML_RE = cfg["xss"]["regex"]["raw_html"]
-HTML_COMMENT_RE = cfg["xss"]["regex"]["html_comment"]
-
-JS_STRINGS   = re.compile(r"""(['"])(?:\\.|(?!\1).)*\1""", re.S)
-JS_LINECOM   = re.compile(r"//[^\n\r]*")
-JS_BLOCKCOM  = re.compile(r"/\*.*?\*/", re.S)
-SCRIPT_BLOCK = re.compile(r"<script[^>]*>(.*?)</script>", re.I | re.S)
-
-# Cache for regex objects to avoid recompiling
-_REGEX_CACHE = {}
-
 # To avoid duplicate hits on page visits
 _REPORTED_STORED_KEYS = {}
 reportLock = Lock()
-
-# To exclude SQL errors when looking for XSS
-SQL = cfg["sqli"]["error_signatures"]
 
 DOM_PAYLOADS = cfg["xss"]["dom_payloads"]
 
@@ -59,79 +42,6 @@ def canary(payload, token):
             return payload[:i] + f' data-canary="{token}"' + payload[i:]
 
     return f"{payload}{token}"
-
-
-def detectXSS(body, token, markedPayload):
-    """
-        If token appears then it's worked
-    """
-    lowerBody = (body or "").lower()
-    token = (token or "").lower()
-    lowerBodyQ = unquote_plus(body).lower()
-    lowerBodyU = unescape(body or "").lower()
-
-    if token not in lowerBody and token not in lowerBodyU and token not in lowerBodyQ:
-        return False, None
-
-    # cache regex for this token
-    if token not in _REGEX_CACHE:
-
-        if len(_REGEX_CACHE) >= 32:
-            _REGEX_CACHE.clear()
-
-        _REGEX_CACHE[token] = (
-            re.compile(SCRIPT_RE.format(token=re.escape(token)), re.I | re.S),
-            re.compile(ATTR_RE.format(token=re.escape(token)), re.I | re.S),
-            re.compile(JSURL_RE.format(token=re.escape(token)), re.I | re.S),
-            re.compile(RAW_HTML_RE.format(token=re.escape(token)), re.I | re.S),
-            re.compile(HTML_COMMENT_RE.format(token=re.escape(token)), re.I | re.S)
-        )
-
-    script_re, attr_re, jsurl_re, raw_re, cmt_re = _REGEX_CACHE[token]
-
-    # Filter SQL errors
-    if any(err.lower() in lowerBody for err in SQL) or any(err.lower() in lowerBodyU for err in SQL):
-        return False, None
-
-    # Check if token survives removal of strings ect
-    if script_re.search(lowerBodyU):
-        for blk in SCRIPT_BLOCK.findall(lowerBodyU):
-            cleaned = JS_BLOCKCOM.sub("", blk)
-            cleaned = JS_LINECOM.sub("", cleaned)
-            cleaned = JS_STRINGS.sub("", cleaned)
-            if token in cleaned.lower():
-                return True, "script_ctx"
-
-    # fallback
-    if script_re.search(lowerBody):
-        for blk in SCRIPT_BLOCK.findall(lowerBody):
-            cleaned = JS_BLOCKCOM.sub("", blk)
-            cleaned = JS_LINECOM.sub("", cleaned)
-            cleaned = JS_STRINGS.sub("", cleaned)
-            if token in cleaned.lower():
-                return True, "script_ctx"
-
-    # Check if xss is in dangerous contexts
-    if attr_re.search(lowerBodyU) or jsurl_re.search(lowerBodyU):
-        return True, "attr_ctx"
-    if attr_re.search(lowerBody) or jsurl_re.search(lowerBody):
-        return True, "attr_ctx"
-    if raw_re.search(body) or raw_re.search(lowerBodyU) or raw_re.search(lowerBodyQ) or \
-            cmt_re.search(body) or cmt_re.search(lowerBodyU) or cmt_re.search(lowerBodyQ):
-        return True, "raw_html_ctx"
-
-    if markedPayload:
-        mp = str(markedPayload)
-        mpHtml = escape(mp, quote=True).lower()
-        mpUrl = quote(mp, safe="").lower()
-        mpUrlp = quote(mp, safe="").replace("%20", "+").lower()
-
-        if (mpHtml and (mpHtml in lowerBody or mpHtml in lowerBodyU)) or \
-                (mpUrl and (mpUrl in lowerBody or mpUrl in lowerBodyU or mpUrl in lowerBodyQ)) or \
-                (mpUrlp and (mpUrlp in lowerBody or mpUrlp in lowerBodyU or mpUrlp in lowerBodyQ)):
-            return True, "raw_html_ctx"
-
-    return False, None
 
 def probeDom(driver, tokenLow):
     """
