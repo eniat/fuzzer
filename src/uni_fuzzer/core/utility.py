@@ -192,10 +192,7 @@ def getDirectories(path):
     """
 
     cfg = get_cfg()
-
-    exts = tuple(cfg.get("paths", {}).get("file_extensions", [
-        ".php", ".html", ".asp", ".aspx", ".jsp", ".py", ".rb", ".zip"
-    ]))
+    exts = cfg["paths"]["file_extensions"]
 
     segments = path.rstrip("/").split("/")
 
@@ -227,3 +224,92 @@ def getParents(path):
             seen.add(n)
             out.append(n)
     return out
+
+cfg = get_cfg()
+BLIND_MARKERS = cfg["sqli"]["blind_markers"]
+BLIND_TIME = cfg["sqli"]["blind_time"]
+BOOLEAN_TRUE  = cfg["sqli"]["boolean_true"]
+BOOLEAN_FALSE = cfg["sqli"]["boolean_false"]
+BOOLEAN_WRAPPERS = cfg["sqli"]["boolean_wrappers"]
+
+def isBlindPayload (payload):
+    """
+        Checks if payload is a blind payload
+    """
+    low = (payload or "").lower()
+    return any(mark in low for mark in BLIND_MARKERS)
+
+def buildBooleanPayloads():
+    """
+        Builds boolean tue/false payload pairs for blind sqli boolean tests
+    """
+    payloadPairs = []
+    for wrap in BOOLEAN_WRAPPERS:
+        for true, false in zip(BOOLEAN_TRUE, BOOLEAN_FALSE):
+            payloadPairs.append((
+                wrap.format(cond=true),
+                wrap.format(cond=false)
+            ))
+    return payloadPairs
+
+def expandTimeToken(payload, seconds=BLIND_TIME):
+    """
+        Replaces __TIME__ in payload strings with the configured number of seconds
+    """
+    return (payload or "").replace("__TIME__", str(seconds))
+
+def canary(payload, token):
+    """
+        Append payload with unique token
+    """
+    s = (payload or "").strip()
+    # Javascript
+    if s.lower().startswith("javascript:") or s.lower().startswith("<script") or "eval(" in s or "alert(" in s:
+        return f'{payload};window.__XSS_CANARY__="{token}";'
+
+    # HTML tag
+    if s.startswith("<") and s.endswith(">"):
+        i = payload.rfind(">")
+        if i != -1:
+            return payload[:i] + f' data-canary="{token}"' + payload[i:]
+
+    return f"{payload}{token}"
+
+def extractIdentifier(el):
+    """
+        Extract identifier finds and filters identifiers for input fields
+        -- Can be edited depending on what to filter/ find
+        return identifier
+    """
+
+    # Selenium
+    if hasattr(el, "get_attribute")and callable(getattr(el, "get_attribute", None)):
+        raw = (
+                el.get_attribute("name") or
+                el.get_attribute("formcontrolname") or
+                el.get_attribute("id") or
+                el.get_attribute("aria-label") or
+                el.get_attribute("placeholder")
+        )
+    # beautiful soup
+    else:
+        raw = (
+                el.get("name") or
+                el.get("formcontrolname") or
+                el.get("id") or
+                el.get("aria-label") or
+                el.get("placeholder")
+        )
+
+    if not raw:
+        return None
+
+    normalized = raw.lower()
+
+    junkKeywords = cfg["crawler"]["junk_keywords"]
+
+    if any(junk in normalized for junk in junkKeywords):
+        return None
+
+
+    return raw.strip()

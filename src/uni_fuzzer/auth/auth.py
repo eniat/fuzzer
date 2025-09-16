@@ -66,7 +66,7 @@ def seleniumLogin(driver, baseUrl, username, password, loginPath=None, selectors
 
 def login(session, baseUrl, username, password, loginPath=None, selectors=None, headers=None):
     """
-        Log in to webapp using default credentials and set security to low
+        Log in to webapp using given/default credentials
     """
 
     try:
@@ -146,8 +146,6 @@ def login(session, baseUrl, username, password, loginPath=None, selectors=None, 
         curPath = urlparse(gr.url).path or "/"
         return lpPath != curPath
 
-    except requests.RequestException:
-        return False
     except Exception:
         return False
 

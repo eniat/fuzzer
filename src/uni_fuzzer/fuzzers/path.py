@@ -1,13 +1,12 @@
 import requests
-import re
 import threading
-from urllib.parse import urljoin, urlparse, parse_qs, urldefrag
+from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath
-from difflib import SequenceMatcher
 
 from requests.adapters import HTTPAdapter
 
+from uni_fuzzer.fuzzers.detection import detectPathTraversal
 from uni_fuzzer.core.baseline import getBaseline
 from uni_fuzzer.auth.auth import login
 from uni_fuzzer.core.utility import get_cfg, loadWordlist
@@ -46,9 +45,6 @@ class PathFuzzer:
         self.interesting200 = []
         self.interesting = []
 
-        # Below set in config/defaults.yaml
-        self.indicators = cfg["path_traversal"]["indicators"]
-
         self.headers = {"User-Agent": cfg["http"]["user_agent"]}
         if cfg["http"]["add_referer"]:
             self.headers["Referer"] = self.baseUrl
@@ -61,26 +57,6 @@ class PathFuzzer:
                 print("[-] HTTP login in PathFuzzer failed")
 
         self.baseline = getBaseline(self.session, baseUrl, self.headers)
-
-
-    def isPathTraversalSuccess(self, response, url):
-        """
-            Detect success based on response
-        """
-        content = response.text.lower()
-        status = response.status_code
-
-        # Check for indicators in response
-        for indicator in self.indicators:
-            if re.search(rf'\b{re.escape(indicator)}\b', content):
-                #print(f"[DEBUG] Matched indicator '{indicator}' in response from {url}")
-                return "vulnerable", indicator
-
-        # If 200 but no indicators deem interesting
-        if status == 200:
-            return "interesting", None
-
-        return "none", None
 
     def  fuzzPath(self, path, currDepth= 0):
         """
@@ -144,8 +120,6 @@ class PathFuzzer:
 
                 with self.lock:
                     if normalized in self.visitedFuzzPaths:
-                        # if not self.isSilent:
-                        #     #print(f"[DEBUG] Skipping recursive interesting path: {normalized}")
                         continue
 
                     self.visitedFuzzPaths.add(normalized)
@@ -156,42 +130,33 @@ class PathFuzzer:
 
     def sendRequest(self, url, depth, isParamFuzzing= False,payload= None):
         """
-            Send a single GET request and check for success
+            Send a GET request and check for success
         """
         try:
 
             response = self.session.get(url, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
 
-            resultType, indicator = self.isPathTraversalSuccess(response,url)
+            resultType, indicator = detectPathTraversal(response,self.baseline)
             status = response.status_code
 
-            if resultType == "interesting" and not isParamFuzzing and self.baseline:
+            # Skip if too similar
+            if resultType == "skip_similar":
+                return None
 
-                baselineText = self.baseline["content"]
-                responseText = response.text
-                similarity = SequenceMatcher(None, baselineText, responseText).quick_ratio()
+            # If an interesting_200 then add to results
+            if resultType == "interesting_200" and not isParamFuzzing:
+                result = {
+                    "url": url,
+                    "depth": depth + 1,
+                    "status_code": status,
+                    "payload": payload,
+                    "response_snippet": (response.text or "")[:200],
+                    "type": "interesting_200"
+                }
+                with self.lock:
+                    self.interesting200.append(result)
 
-                # If too similar skip as false positive
-                if status == self.baseline["status_code"] and similarity >= cfg["fuzz"]["similarity_skip_threshold"]:
-                    # if not self.isSilent:
-                    #     print(f"[i] Skipping 200 based on similarity ({similarity:.2f}): {url}")
-                    return None
-
-                elif status == 200 and similarity < cfg["fuzz"]["similarity_skip_threshold"]:
-                    # if not self.isSilent:
-                    #     print(f"[+]Discovered interesting path: {url} (Similarity: {similarity:.2f})")
-
-                    result= {"url": url,
-                             "depth": depth + 1,
-                             "status_code": status,
-                             "payload": payload,
-                             "response_snippet": response.text[:200],
-                             "type": "interesting_200"
-                             }
-                    with self.lock:
-                        self.interesting200.append(result)
-
-                    return {"type": "interesting_200", "data": result}
+                return {"type": "interesting_200", "data": result}
 
             if resultType == "vulnerable":
                 with self.lock:

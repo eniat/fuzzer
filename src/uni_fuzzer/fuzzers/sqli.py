@@ -1,116 +1,23 @@
 import requests
 import threading
-import re
-from html import escape
-from urllib.parse import urlparse, quote, urlencode
+from urllib.parse import urlparse, quote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 
+from uni_fuzzer.core.probes import probeReactivity
 from uni_fuzzer.auth.auth import login
 from uni_fuzzer.fuzzers.detection import detectSQLiBlind, detectSQLiDiff, detectSQLError
 from uni_fuzzer.core.baseline import sqliBaseline, getBlindBaseline
-from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits, isBlindPayload, buildBooleanPayloads, expandTimeToken
 cfg = get_cfg()
 
 SQL = cfg["sqli"]["error_signatures"]
 MAX_SAMPLES_PER_GROUP = cfg["sqli"]["max_samples_per_group"]
 
 TIMING_THRESHOLD_MS = cfg["sqli"]["timing_threshold_ms"]
-BLIND_MARKERS = cfg["sqli"]["blind_markers"]
 BLIND_FACTOR  = cfg["sqli"]["blind_timing_factor"]
-BLIND_TIME = cfg["sqli"]["blind_time"]
-BOOLEAN_TRUE  = cfg["sqli"]["boolean_true"]
-BOOLEAN_FALSE = cfg["sqli"]["boolean_false"]
-BOOLEAN_WRAPPERS = cfg["sqli"]["boolean_wrappers"]
 TIMING_PAYLOAD_TRIALS  = cfg["sqli"]["timing_payload_trials"]
 TIMING_CONFIRM_PROBES  = cfg["sqli"]["timing_confirm_probes"]
-
-def isBlindPayload (payload):
-    """
-        Checks if payload is a blind payload
-    """
-    low = (payload or "").lower()
-    return any(mark in low for mark in BLIND_MARKERS)
-
-def buildBooleanPayloads():
-    """
-        Builds boolean tue/false payload pairs for blind sqli boolean tests
-    """
-    payloadPairs = []
-    for wrap in BOOLEAN_WRAPPERS:
-        for true, false in zip(BOOLEAN_TRUE, BOOLEAN_FALSE):
-            payloadPairs.append((
-                wrap.format(cond=true),
-                wrap.format(cond=false)
-            ))
-    return payloadPairs
-
-def expandTimeToken(payload, seconds=BLIND_TIME):
-    """
-        Replaces __TIME__ in payload strings with the configured number of seconds
-    """
-    return (payload or "").replace("__TIME__", str(seconds))
-
-def probeReactivity(session, url, method, fields, fuzzField, headers):
-    """
-        Tests form to see if it is reactionary to avoid irrelevant fuzzing
-    """
-    try:
-        if not fields or not fuzzField:
-            return False
-
-
-        if method == "POST":
-            # Build POST
-            baseData = {f: "1" for f in fields}
-
-            baseRes = session.post(url, data=baseData, headers=headers, timeout=cfg["http"]["timeout_post_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
-            baseBody = baseRes.text or ""
-            baseStatus = baseRes.status_code
-
-            # Flip the 1 to 2
-            data = {f: ("2" if f in fuzzField else "1") for f in fields}
-
-            res = session.post(url, data=data, headers=headers,timeout=cfg["http"]["timeout_post_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
-            body = res.text or ""
-            status = res.status_code
-
-        else:
-            # Build GET
-            baseParams = [f"{f}=1" for f in fields]
-            sep = "&" if "?" in url else "?"
-            baseUrl = f"{url}{sep}{'&'.join(baseParams)}"
-
-            baseRes = session.get(baseUrl, headers=headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
-            baseBody = baseRes.text or ""
-            baseStatus = baseRes.status_code
-
-            # Flip the 1 to 2
-            params = [f"{f}=2" if f in fuzzField else f"{f}=1" for f in fields]
-            fullUrl = f"{url}{sep}{'&'.join(params)}"
-
-            res = session.get(fullUrl,headers=headers,timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
-            body = res.text or ""
-            status = res.status_code
-
-        # Decide if reactive
-        if baseStatus != status:
-            return True
-
-        # Detect difference
-        if detectSQLiDiff(baseBody, body, payload=None):
-            return True
-
-        # Check min change
-        minDelta = int(cfg["sqli"]["plain_preprobe_min_delta"])
-
-        if abs(len((body or "").strip()) - len((baseBody or "").strip())) >= minDelta:
-            return True
-
-    except Exception:
-        pass
-
-    return False
 
 class SQLiFuzzer:
 

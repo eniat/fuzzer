@@ -12,47 +12,8 @@ from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import seleniumLogin, login
 
-from uni_fuzzer.core.utility import get_cfg
+from uni_fuzzer.core.utility import get_cfg, extractIdentifier
 cfg = get_cfg()
-
-def extractIdentifier(el):
-    """
-        Extract identifier finds and filters identifiers for input fields
-        -- Can be edited depending on what to filter/ find
-        return identifier
-    """
-
-    # Selenium
-    if hasattr(el, "get_attribute")and callable(getattr(el, "get_attribute", None)):
-        raw = (
-                el.get_attribute("name") or
-                el.get_attribute("formcontrolname") or
-                el.get_attribute("id") or
-                el.get_attribute("aria-label") or
-                el.get_attribute("placeholder")
-        )
-    # beautiful soup
-    else:
-        raw = (
-                el.get("name") or
-                el.get("formcontrolname") or
-                el.get("id") or
-                el.get("aria-label") or
-                el.get("placeholder")
-        )
-
-    if not raw:
-        return None
-
-    normalized = raw.lower()
-
-    junkKeywords = cfg["crawler"]["junk_keywords"]
-
-    if any(junk in normalized for junk in junkKeywords):
-        return None
-
-
-    return raw.strip()
 
 
 class Crawler:

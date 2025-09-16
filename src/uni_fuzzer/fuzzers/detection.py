@@ -1,4 +1,5 @@
 import re
+from difflib import SequenceMatcher
 from urllib.parse import quote, unquote_plus
 from html import escape, unescape
 
@@ -175,3 +176,34 @@ def detectSQLiDiff(baseHtml, html, isNotSQLIBlind=True, true= None, false=None, 
         return True
 
     return False
+
+def detectPathTraversal(response, baseline=None, similarity_skip_threshold=cfg["fuzz"]["similarity_skip_threshold"]):
+    """
+        Detect success based on response
+    """
+    # Below set in config/defaults.yaml
+    indicators = cfg["path_traversal"]["indicators"]
+    content = response.text.lower()
+    status = response.status_code
+
+    # Check for indicators in response
+    for indicator in indicators:
+        if re.search(rf'\b{re.escape(indicator)}\b', content):
+            return "vulnerable", indicator
+
+    # if status is 200 baseline check
+    if status == 200:
+        if baseline:
+
+            baselineT = baseline.get("content", "")
+            baselineS = baseline.get("status_code")
+            similarity = SequenceMatcher(None, baselineT, response.text or "").quick_ratio()
+
+            # Skip if similar to baseline
+            if status == baselineS and similarity >= similarity_skip_threshold:
+                return "skip_similar", similarity
+
+            # If not mark interesting
+            return "interesting_200", similarity
+        return "interesting", None
+    return "none", None

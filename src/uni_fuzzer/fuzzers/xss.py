@@ -1,9 +1,8 @@
 import requests
-import re
 import time
 from urllib.parse import urljoin, urlparse, quote, unquote_plus
 from uuid import uuid4
-from html import escape, unescape
+from html import unescape
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -11,11 +10,12 @@ from requests.cookies import RequestsCookieJar
 from requests.adapters import HTTPAdapter
 from threading import Lock
 
+from uni_fuzzer.core.probes import probeDom, probeReflexivity
 from uni_fuzzer.auth.auth import seleniumLogin, login
 from uni_fuzzer.core.baseline import baselineForm
 from uni_fuzzer.fuzzers.detection import detectXSS
 
-from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits, canary
 cfg = get_cfg()
 
 # To avoid duplicate hits on page visits
@@ -25,71 +25,6 @@ reportLock = Lock()
 DOM_PAYLOADS = cfg["xss"]["dom_payloads"]
 
 MAX_SAMPLES_PER_GROUP = cfg["xss"]["max_samples_per_group"]
-
-def canary(payload, token):
-    """
-        Append payload with unique token
-    """
-    s = (payload or "").strip()
-    # Javascript
-    if s.lower().startswith("javascript:") or s.lower().startswith("<script") or "eval(" in s or "alert(" in s:
-        return f'{payload};window.__XSS_CANARY__="{token}";'
-
-    # HTML tag
-    if s.startswith("<") and s.endswith(">"):
-        i = payload.rfind(">")
-        if i != -1:
-            return payload[:i] + f' data-canary="{token}"' + payload[i:]
-
-    return f"{payload}{token}"
-
-def probeDom(driver, tokenLow):
-    """
-        Check dom side effects of payloads
-    """
-    try:
-        return driver.execute_script("""
-        const L = s => (s||'').toLowerCase();
-        const t = arguments[0];
-        let gflag = '', ls = '', ss = '';
-        try { gflag = L(window.__XSS_CANARY__); } catch(e){}
-        try { ls = L(JSON.stringify(Object.values(localStorage))); } catch(e){}
-        try { ss = L(JSON.stringify(Object.values(sessionStorage))); } catch(e){}
-        let el = false;
-        try { el = !!document.querySelector(`x-canary[data-t="${t}"]`); } catch(e){}
-        return { gflag: gflag.includes(t), ls: ls.includes(t), ss: ss.includes(t), el };""", tokenLow) or {}
-
-    except Exception:
-        return {}
-
-def probeReflexivity(session, url,method, fields, fuzzField, headers, token):
-    """
-        Probe to check if reflected back for form fuzzing
-    """
-    probe = f"xssprobe-{token}"
-
-    try:
-        if method == "POST":
-            data = {f: (probe if f in fuzzField else "test") for f in fields}
-            res = session.post(url, data=data, headers=headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
-
-        else:
-            params = [f"{f}={quote(probe, safe='')}" if f in fuzzField else f"{f}=test" for f in fields]
-            separator = "&" if "?" in url else "?"
-            fullUrl = f"{url}{separator}{'&'.join(params)}"
-
-            res = session.get(fullUrl, headers=headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
-
-        body = res.text or ""
-        low = body.lower()
-
-        if probe.lower() in low or unescape(body).lower().find(probe.lower()) != -1:
-            return True
-
-    except Exception:
-        pass
-
-    return False
 
 class XSSFuzzer:
 
@@ -346,7 +281,6 @@ class XSSFuzzer:
                 else:
                     # GET form fuzzing
                     baseP = {f: "test" for f in fields}
-                    baseP = autoSubmits(baseHtml, baseP)
                     separator = "&" if "?" in url else "?"
 
                     for raw, marked, enc in prebuiltPayloads:
@@ -475,7 +409,6 @@ class XSSFuzzer:
                             else:
                                 params[field] = "test"
 
-                        params = autoSubmits(baseHtml, params)
 
                         separator = "&" if "?" in url else "?"
                         logParams = [f"{k}={quote(str(v), safe='')}" for k, v in params.items()]
