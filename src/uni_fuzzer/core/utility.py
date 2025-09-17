@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import re
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse, unquote
@@ -241,7 +243,7 @@ def isBlindPayload (payload):
 
 def buildBooleanPayloads():
     """
-        Builds boolean tue/false payload pairs for blind sqli boolean tests
+        Builds boolean true/false payload pairs for blind sqli boolean tests
     """
     payloadPairs = []
     for wrap in BOOLEAN_WRAPPERS:
@@ -262,18 +264,38 @@ def canary(payload, token):
     """
         Append payload with unique token
     """
-    s = (payload or "").strip()
+    striped = (payload or "").strip()
+    token = token
+    low = striped.lower()
     # Javascript
-    if s.lower().startswith("javascript:") or s.lower().startswith("<script") or "eval(" in s or "alert(" in s:
-        return f'{payload};window.__XSS_CANARY__="{token}";'
+    if low.startswith("javascript:"):
+        return striped + ("" if striped.rstrip().endswith(";") else ";") + 'window.__XSS_CANARY__="' + token + '"'
 
-    # HTML tag
-    if s.startswith("<") and s.endswith(">"):
-        i = payload.rfind(">")
-        if i != -1:
-            return payload[:i] + f' data-canary="{token}"' + payload[i:]
+    # <script>
+    mes = re.search(r'(<\s*script\b[^>]*>)(.*?)(</\s*script\s*>)', striped, re.I | re.S)
+    if mes:
+        body = mes.group(2)
+        sep = "" if body.rstrip().endswith(";") else ";"
+        return mes.group(1) + body + sep + 'window.__XSS_CANARY__="' + token + '"' + mes.group(3)
 
-    return f"{payload}{token}"
+    # inline handlers
+    new = re.sub(r'(\bon[a-z]+\s*=\s*)(["\'])(.*?)\2', r'\1\2\3;window.__XSS_CANARY__="' + token + r'"\2', striped, flags=re.I | re.S)
+    if new != striped:
+        return new
+    new = re.sub(r'(\bon[a-z]+\s*=\s*)([^\'"\s>]+)', r'\1\2;window.__XSS_CANARY__="' + token + r'"', striped, flags=re.I)
+    if new != striped:
+        return new
+
+    # HTML
+    if "<" in striped and ">" in striped:
+        mes = re.search(r'\s*<\s*(?!/)([a-z0-9:-]+)([^>]*)>', striped, re.I)
+        if mes:
+            indexAt = mes.end() - 1
+            striped = striped[:indexAt] + ' data-canary="' + token + '"' + striped[indexAt:]
+        return striped + '<script>window.__XSS_CANARY__="' + token + '"</script>'
+
+    # plain
+    return striped + ';window.__XSS_CANARY__="' + token + '";'
 
 def extractIdentifier(el):
     """

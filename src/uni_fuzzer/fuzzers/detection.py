@@ -79,6 +79,11 @@ def detectXSS(body, token, markedPayload):
             if token in cleaned.lower():
                 return True, "script_ctx"
 
+    # Checks if canary is inside JS String
+    canaryJs = re.compile(r'(?:^|[^a-z0-9_])(?:window\.)?__xss_canary__\s*[:=]\s*["\']?\s*' + re.escape(token) + r'\s*["\']?',re.I)
+    if canaryJs.search(lowerBodyU) or canaryJs.search(lowerBody):
+        return True, "script_ctx"
+
     # Check if xss is in dangerous contexts
     if attr_re.search(lowerBodyU) or jsurl_re.search(lowerBodyU):
         return True, "attr_ctx"
@@ -87,6 +92,11 @@ def detectXSS(body, token, markedPayload):
     if raw_re.search(body) or raw_re.search(lowerBodyU) or raw_re.search(lowerBodyQ) or \
             cmt_re.search(body) or cmt_re.search(lowerBodyU) or cmt_re.search(lowerBodyQ):
         return True, "raw_html_ctx"
+
+    # Checks if canary is near inline handler like onmouseover
+    canaryNear = re.compile(r'on[a-z]+\s*=\s*[^>]{0,200}' + re.escape(token), re.I | re.S)
+    if canaryNear.search(lowerBodyU) or canaryNear.search(lowerBody):
+        return True, "attr_ctx"
 
     if markedPayload:
         mp = str(markedPayload)
