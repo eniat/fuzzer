@@ -28,13 +28,12 @@ MAX_SAMPLES_PER_GROUP = cfg["xss"]["max_samples_per_group"]
 
 class XSSFuzzer:
 
-    def __init__(self, baseUrl, useCrawler = False, outputToFile= False, wordlistPath=None, isSilent=False, headless= True, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False, token= None):
+    def __init__(self, baseUrl, useCrawler = False, outputToFile= False, wordlistPath=None, headless= True, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False, token= None, bailEvent=None):
         self.baseUrl = baseUrl
         self.useCrawler = useCrawler
         self.wordlistPath = wordlistPath
         self.outputToFile = outputToFile
         self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
-        self.isSilent = isSilent
         self.token = token or f"XSSCanary-{uuid4().hex[:8]}"
         self.headless = headless
 
@@ -59,6 +58,7 @@ class XSSFuzzer:
         self.auth = auth
 
         self.vulnerableParams = []
+        self.bailEvent = bailEvent
 
         if self.loginUsername and self.loginPassword and self.auth:
             # Use the generic HTTP login in auth.py
@@ -80,6 +80,8 @@ class XSSFuzzer:
             Send a single GET request and check for success
         """
         try:
+            if self.bailEvent and self.bailEvent.is_set():
+                return None
             if method == "POST":
                 response = self.session.post( url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["submit"])
 
@@ -109,15 +111,19 @@ class XSSFuzzer:
                     "snippet": body[:200],
                 }
                 self.vulnerableParams.append(result)
+                if self.bailEvent:
+                    try:
+                        self.bailEvent.set()
+                    except Exception:
+                        pass
                 return {"type": "vulnerable", "data": result}
 
         except requests.exceptions.Timeout:
             # When fuzzing large endpoints timeouts overwhelm, disable if needed
             pass
 
-        except requests.RequestException as e:
-            if not self.isSilent:
-                print(f"[!] Request failed for {url}: {e}")
+        except Exception:
+            pass
 
         return None
 
@@ -174,6 +180,9 @@ class XSSFuzzer:
 
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             for raw, marked, enc in prebuiltPayloads:
+                # If bail on first then bail
+                if self.bailEvent and self.bailEvent.is_set():
+                    break
                 # Replace FUZZ with the payload, uniquely mark it, encode it for URL injection
                 fuzzedQuery = originalQuery.replace("FUZZ", enc)
                 fullUrl = f"{baseNoQuery}?{fuzzedQuery}"
@@ -182,6 +191,9 @@ class XSSFuzzer:
 
             # Collect results as requests complete
             for future in as_completed(tasks):
+                # If bail on first then bail
+                if self.bailEvent and self.bailEvent.is_set():
+                    break
 
                 out = future.result()
 
@@ -271,6 +283,9 @@ class XSSFuzzer:
                     baseD = {f: "test" for f in fields}
                     baseD = autoSubmits(baseHtml, baseD)
                     for raw, marked, _enc in prebuiltPayloads:
+                        # If bail on first then bail
+                        if self.bailEvent and self.bailEvent.is_set():
+                            break
                         data = baseD.copy()
                         for f in fuzzField:
                             data[f] = marked
@@ -284,6 +299,9 @@ class XSSFuzzer:
                     separator = "&" if "?" in url else "?"
 
                     for raw, marked, enc in prebuiltPayloads:
+                        # If bail on first then bail
+                        if self.bailEvent and self.bailEvent.is_set():
+                            break
                         params = dict(baseP)
                         for f in fuzzField:
                             params[f] = enc
@@ -296,6 +314,9 @@ class XSSFuzzer:
 
                 # collect responses at end
                 for fut in as_completed(tasks):
+                    # If bail on first then bail
+                    if self.bailEvent and self.bailEvent.is_set():
+                        break
                     try:
                         res = fut.result()
 
@@ -379,6 +400,9 @@ class XSSFuzzer:
                 baseHtml = base["content"]
 
                 for raw, marked, enc in prebuiltPayloads:
+                    # If bail on first then bail
+                    if self.bailEvent and self.bailEvent.is_set():
+                        break
 
                     if method == "POST":
                         # POST form fuzzing
@@ -535,11 +559,12 @@ class XSSFuzzer:
                             entry["count"] += 1
                             if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                                 entry["payload_samples"].append(raw)
+                        if self.bailEvent:
+                            self.bailEvent.set()
 
         return list(results.values())
                         # Add break if you just want to see its vulnerable, without lists all successful payloads
                         #break
-
 
     def domXSS(self, forms= None, endpoints= None):
         """
@@ -667,8 +692,6 @@ class XSSFuzzer:
                         loginPath=self.loginPath,
                         selectors=None
                 ):
-                    if not self.isSilent:
-                        print("[-] Selenium login failed")
                     return list(results.values())
 
                 try:
@@ -687,9 +710,13 @@ class XSSFuzzer:
 
 
             seen = set()
+            pageRep = set() if self.bailEvent is not None else None
             for finUrl, raw, marked in candidates:
                 # Normalize the page key
                 pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
+
+                if pageRep is not None and pageKey in pageRep:
+                    continue
 
                 if (pageKey, raw) in seen:
                     # Skip already tested pages
@@ -762,6 +789,8 @@ class XSSFuzzer:
                             "count": 1,
                             "type": "xss_dom"
                         }
+                        if pageRep is not None:
+                            pageRep.add(pageKey)
                     else:
                         entry = results[resultsKey]
                         entry["count"] += 1

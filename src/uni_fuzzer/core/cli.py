@@ -31,6 +31,7 @@ def buildParser():
     parser.add_argument("-pw","--password", type=str, help="Password for Selenium/HTTP login")
     parser.add_argument("-k","--login-path", type=str, help="Login path or absolute URL")
     parser.add_argument("-R","--report-all", action="store_true", default=False, help="Include potential and path 'interesting' findings in the report.")
+    parser.add_argument("-B", "--bail-on-hit", action="store_true", help="Stop fuzzing as soon as the first hit is detected.")
 
     return parser
 

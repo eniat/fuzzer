@@ -16,13 +16,13 @@ MAX_SAMPLES_PER_GROUP = cfg["path_traversal"]["max_samples_per_group"]
 
 class PathFuzzer:
 
-    def __init__(self, baseUrl, wordlistPath= None, outputToFile = False, maxDepth= None,isSilent= False, loginUsername=None,loginPassword=None, loginPath=None, session =None, auth= None):
+    def __init__(self, baseUrl, wordlistPath= None, outputToFile = False, maxDepth= None,loginUsername=None,loginPassword=None, loginPath=None, session =None, auth= None,bailEvent=None):
         self.baseUrl = baseUrl
         self.wordlistPath = wordlistPath
         self.outputToFile = outputToFile
         self.maxDepth =  maxDepth if maxDepth is not None else cfg["fuzz"]["max_depth_default"]
         self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
-        self.isSilent = isSilent
+        self.bailEvent = bailEvent
 
         # Authentication
         self.session = session or requests.Session()
@@ -78,6 +78,10 @@ class PathFuzzer:
                 return
             self.visitedFuzzPaths.add(normalizedPath)
 
+        # If bail on first then bail
+        if self.bailEvent and self.bailEvent.is_set():
+            return
+
         if currDepth > self.maxDepth:
             return
 
@@ -90,6 +94,9 @@ class PathFuzzer:
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
             # Fuzz with all payloads
             for payload in self.payloads:
+                # If bail on first then bail
+                if self.bailEvent and self.bailEvent.is_set():
+                    break
                 # Check for /
                 basePath = path if path.endswith('/') else path + '/'
                 fullPath = basePath + payload
@@ -111,7 +118,9 @@ class PathFuzzer:
                     interestingResults.append((
                         result["data"]["url"],
                         result["data"]["depth"]))
-
+        # If bail on first then bail
+        if self.bailEvent and self.bailEvent.is_set():
+            return
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["path_workers_recursive"]) as executor:
             # Recurse on new 200 paths that are interesting
             futures = []
@@ -133,7 +142,9 @@ class PathFuzzer:
             Send a GET request and check for success
         """
         try:
-
+            # If bail on first then bail
+            if self.bailEvent and self.bailEvent.is_set():
+                return
             response = self.session.get(url, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
 
             resultType, indicator = detectPathTraversal(response,self.baseline)
@@ -178,6 +189,12 @@ class PathFuzzer:
                             "type": kind,
                         }
 
+                        if self.bailEvent:
+                            try:
+                                self.bailEvent.set()
+                            except Exception:
+                                pass
+
                     else:
                         entry = self.vulnerablePaths[resultsKey]
                         entry["count"] += 1
@@ -218,9 +235,8 @@ class PathFuzzer:
             # When fuzzing large endpoints timeouts overwhelm, disable if needed
             pass
 
-        except requests.RequestException as e:
-            if not self.isSilent:
-                print(f"[!] Request failed for {url}: {e}")
+        except Exception:
+            pass
 
         return None
 

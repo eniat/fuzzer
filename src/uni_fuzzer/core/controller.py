@@ -1,3 +1,4 @@
+import threading
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath
@@ -196,14 +197,15 @@ def run(args):
 
                     # Path traversal fuzzing
                     print(f"[Thread] Path Fuzzing: {fullUrl}")
+                    bail=threading.Event() if args.bail_on_hit else None
 
                     fuzzer = PathFuzzer(
                         baseUrl= fullUrl,
                         wordlistPath =wordlistPathsParams,
                         outputToFile= args.output_to_file,
-                        isSilent = True,
                         session=sess,
                         auth=False,
+                        bailEvent=bail
                     )
                     fuzzer.visitedPaths = globalVisitedPaths
                     fuzzer.visitedFuzzPaths = globalVisitedFuzzPaths
@@ -228,14 +230,15 @@ def run(args):
                     fuzzedUrl = f"{fullUrl}?{fuzzQuery}" if "?" not in fullUrl else f"{fullUrl}&{fuzzQuery}"
 
                     print(f"[Thread] Param Fuzzing: {fuzzedUrl}")
+                    bail = threading.Event() if args.bail_on_hit else None
 
                     fuzzer = PathFuzzer(
                         baseUrl= fuzzedUrl,
                         wordlistPath= wordlistPathsParams,
                         outputToFile= args.output_to_file,
-                        isSilent= True,
                         session=sess,
                         auth=False,
+                        bailEvent=bail
                     )
                     fuzzer.visitedPaths = globalVisitedPaths
                     fuzzer.visitedFuzzPaths = globalVisitedFuzzPaths
@@ -251,17 +254,18 @@ def run(args):
                     fuzzedUrl = f"{fullUrl}?{fuzzQuery}" if "?" not in fullUrl else f"{fullUrl}&{fuzzQuery}"
 
                     print(f"[Thread] XSS Param Fuzzing: {fuzzedUrl}")
+                    bail = threading.Event() if args.bail_on_hit else None
 
                     fuzzer = XSSFuzzer(
                         baseUrl= fuzzedUrl,
                         useCrawler=False,
                         wordlistPath=wordlistXss,
                         outputToFile=args.output_to_file,
-                        isSilent =True,
                         headless=not args.no_headless,
                         session=sess,
                         auth=False,
-                        token=runToken
+                        token=runToken,
+                        bailEvent=bail
                     )
 
                     res = fuzzer.paramXSS()
@@ -282,16 +286,17 @@ def run(args):
                 if args.xss_forms:
 
                     print(f"[Thread] XSS Form Fuzzing: {fullUrl}")
+                    bail = threading.Event() if args.bail_on_hit else None
                     fuzzer = XSSFuzzer(
                         baseUrl=args.start_url,
                         useCrawler=False,
                         wordlistPath=wordlistXss,
                         outputToFile=args.output_to_file,
-                        isSilent=True,
                         headless=not args.no_headless,
                         session=sess,
                         auth=False,
-                        token=runToken
+                        token=runToken,
+                        bailEvent=bail
                     )
 
                     res = fuzzer.formXSS([form])
@@ -303,19 +308,20 @@ def run(args):
                 if args.xss_stored:
 
                     print(f"[Thread] XSS Stored Fuzzing: {fullUrl}")
+                    bail = threading.Event() if args.bail_on_hit else None
                     fuzzer = XSSFuzzer(
                         baseUrl=args.start_url,
                         useCrawler= False,
                         wordlistPath=wordlistXss,
                         outputToFile=args.output_to_file,
-                        isSilent=True,
                         headless=not args.no_headless,
                         session=sess,
                         auth=False,
                         loginUsername=args.username,
                         loginPassword=args.password,
                         loginPath=args.login_path,
-                        token=runToken
+                        token=runToken,
+                        bailEvent=bail
                     )
 
                     # Pass directories of forms/ shared directory endpoints
@@ -335,14 +341,15 @@ def run(args):
                 if args.fuzz_sqli:
 
                     print(f"[Thread] SQLi Form Fuzzing: {fullUrl}")
+                    bail = threading.Event() if args.bail_on_hit else None
                     fuzzer = SQLiFuzzer(
                         baseUrl=args.start_url,
                         useCrawler= False,
                         wordlistPath=wordlistSqli,
                         outputToFile=args.output_to_file,
-                        isSilent=True,
                         session=sess,
                         auth=False,
+                        bailEvent=bail
                     )
 
                     res = fuzzer.SQLiFuzz([form])
@@ -356,14 +363,15 @@ def run(args):
                 if args.fuzz_sqli_b:
 
                     print(f"[Thread] SQLi Blind Form Fuzzing: {fullUrl}")
+                    bail = threading.Event() if args.bail_on_hit else None
                     fuzzer = SQLiFuzzer(
                         baseUrl=args.start_url,
                         useCrawler=False,
                         wordlistPath=wordlistSqli,
                         outputToFile=args.output_to_file,
-                        isSilent=True,
                         session=sess,
                         auth=False,
+                        bailEvent=bail
                     )
 
                     res = fuzzer.SQLiBlindFuzz([form])
@@ -454,19 +462,20 @@ def run(args):
                     print(f"\n[+] Running Dom XSS on discovered forms/endpoints...\n")
                     domSessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path)
                     domSess = domSessPool[0] if domSessPool else None
+                    bail = threading.Event() if args.bail_on_hit else None
                     fuzzer = XSSFuzzer(
                         baseUrl=args.start_url,
                         useCrawler=False,
                         wordlistPath=wordlistXss,
                         outputToFile=args.output_to_file,
-                        isSilent=True,
                         headless=not args.no_headless,
                         session=domSess,
                         auth=args.auth,
                         loginUsername=args.username,
                         loginPassword=args.password,
                         loginPath=args.login_path,
-                        token=runToken
+                        token=runToken,
+                        bailEvent=bail
                     )
 
                     res = fuzzer.domXSS(forms=rawDomForms, endpoints=endpoints)
@@ -537,7 +546,6 @@ def run(args):
                     useCrawler=False,
                     wordlistPath=wordlistXss,
                     outputToFile=args.output_to_file,
-                    isSilent=True,
                     headless=not args.no_headless,
                     session=None,
                     auth=args.auth,
@@ -556,7 +564,6 @@ def run(args):
                     baseUrl=args.start_url,
                     wordlistPath=wordlistPathsParams,
                     outputToFile=args.output_to_file,
-                    isSilent=True,
                     session=None,
                     loginUsername=args.username,
                     loginPassword=args.password,

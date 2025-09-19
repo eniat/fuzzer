@@ -21,12 +21,12 @@ TIMING_CONFIRM_PROBES  = cfg["sqli"]["timing_confirm_probes"]
 
 class SQLiFuzzer:
 
-    def __init__(self, baseUrl, useCrawler=False, outputToFile= False, wordlistPath=None, isSilent= False, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False):
+    def __init__(self, baseUrl, useCrawler=False, outputToFile= False, wordlistPath=None, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False, bailEvent=None):
         self.baseUrl = baseUrl
         self.useCrawler = useCrawler
         self.wordlistPath = wordlistPath
         self.outputToFile = outputToFile
-        self.isSilent = isSilent
+        self.bailEvent = bailEvent
 
         # Authentication
         self.session = session or requests.Session()
@@ -93,8 +93,14 @@ class SQLiFuzzer:
                     continue
 
                 for raw in self.payloads:
+                    # If bail on first then bail
+                    if self.bailEvent and self.bailEvent.is_set():
+                        break
                     payload = raw
                     for target in fuzzTargets:
+                        # If bail on first then bail
+                        if self.bailEvent and self.bailEvent.is_set():
+                            break
                         if method == "POST":
                             # POST form fuzzing
                             data = {f: (payload if f == target else "1") for f in fields}
@@ -120,6 +126,9 @@ class SQLiFuzzer:
 
                 # collect responses as they finish
                 for fut in as_completed(tasks):
+                    # If bail on first then bail
+                    if self.bailEvent and self.bailEvent.is_set():
+                        break
                     try:
                         res = fut.result()
 
@@ -186,6 +195,8 @@ class SQLiFuzzer:
                                     entry["count"] += 1
                                     if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                                         entry["payload_samples"].append(payload)
+                                if self.bailEvent:
+                                    self.bailEvent.set()
         return list(self.vulnerableForms.values())
 
     def SQLiBlindFuzz(self, forms):
@@ -220,6 +231,9 @@ class SQLiFuzzer:
                 baseText, baseStatus = sqliBaseline(self.session, self.headers, url, method, fields)
 
                 for trueCond, falseCond in boolPairs:
+                    # If bail on first then bail
+                    if self.bailEvent and self.bailEvent.is_set():
+                        break
                     pairId = f"{trueCond}|||{falseCond}"
                     if method == "POST":
                         # POST form fuzzing
@@ -285,6 +299,9 @@ class SQLiFuzzer:
                 precheckBools = {}
 
                 for fut in as_completed(tasks):
+                    # If bail on first then bail
+                    if self.bailEvent and self.bailEvent.is_set():
+                        break
                     kind, finUrl, condStr, pid = ctx[fut]
 
                     try:
@@ -343,6 +360,8 @@ class SQLiFuzzer:
                                     entry["count"] += 1
                                     if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                                         entry["payload_samples"].append(payloadUsed)
+                                if self.bailEvent:
+                                    self.bailEvent.set()
 
                 # Sequentially fuzz for blind timing
                 baselineMs = getBlindBaseline(self.session, self.headers,url, method, fields)
@@ -351,6 +370,9 @@ class SQLiFuzzer:
                     for raw in self.payloads:
                         if not isBlindPayload(raw):
                             continue
+                        # If bail on first then bail
+                        if self.bailEvent and self.bailEvent.is_set():
+                            break
 
                         payload = expandTimeToken(raw)
                         targets = [f for f in fields if isFuzzableField(f)]
@@ -358,6 +380,9 @@ class SQLiFuzzer:
                             continue
 
                         for target in targets:
+                            # If bail on first then bail
+                            if self.bailEvent and self.bailEvent.is_set():
+                                break
 
                             if method == "POST":
                                 # POST form fuzzing
@@ -480,5 +505,7 @@ class SQLiFuzzer:
                                         entry["count"] += 1
                                         if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                                             entry["payload_samples"].append(payload)
+                                    if self.bailEvent:
+                                        self.bailEvent.set()
 
             return list(self.vulnerableForms.values())
