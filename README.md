@@ -1,7 +1,19 @@
-TO do list 
-[+] add to cli and fuzzers a bail after first hit option to just show vuln drastic speed up
-[+] add json reporting 
-[+] mutations potentially using ramsada and then my own
-[+] json fuzzer 
-[+] potential OpenAI prompting depending on cost/ time
-[+] add cli art/ loading/ progress bars 
+# To‑Do List
+
+- [ ] **Add bail after first hit option**  
+  Stop fuzzing once the first vulnerability is found for drastic speed-up.
+
+- [ ] **Add JSON reporting**  
+  Structured output for easier parsing and CI integration.
+
+- [ ] **Implement mutations**  
+  Start with Ramsada, then build custom mutation strategies.
+
+- [ ] **Add JSON fuzzer**  
+  Accept JSON-formatted test cases for fuzzing.
+
+- [ ] **Explore OpenAI prompting**  
+  Integrate LLM prompting depending on cost and time.
+
+- [ ] **Improve CLI UX**  
+  Add CLI art, loading animations, and progress bars.
