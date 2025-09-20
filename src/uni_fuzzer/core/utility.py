@@ -51,7 +51,9 @@ def collapseDuplicates(items):
         Collapses duplicates that go into the same normalised path
     """
     groups = {}
+    storedGroups = {}
     passthrough = []
+    emitted = []
 
     cfg = get_cfg()
 
@@ -59,6 +61,8 @@ def collapseDuplicates(items):
     SENSITIVE_FILES = cfg["paths"]["sensitive_files"]
     FILE_EXTENSIONS = cfg["paths"]["file_extensions"]
     COLLAPSIBLE_TYPES = cfg["paths"]["collapsible_types"]
+    XSS_MAX_SAMPLES = cfg["xss"]["max_samples_per_group"]
+    PATH_MAX_SAMPLES = cfg["path_traversal"]["max_samples_per_group"]
 
     for item in items or []:
         rawUrl = (item.get("url") or "").strip()
@@ -67,10 +71,73 @@ def collapseDuplicates(items):
         if not rawUrl:
             continue
 
+        # Purely collapse XSS_stored as each thread checks all endpoints
+        if typ == "xss_stored":
+            p = urlparse(rawUrl)
+            scheme = (p.scheme or "").lower()
+            host = (p.netloc or "").lower()
+            path = p.path or "/"
+
+            # Normalise ands strip
+            if path != "/" and path.endswith("/"):
+                path = path.rstrip("/")
+
+            pageUrl = f"{scheme}://{host}{path}"
+            indicator = (item.get("indicator") or "N/A")
+
+            skey = (typ, host, path, indicator)
+
+            try:
+                count = int(item.get("count") or 0)
+            except Exception:
+                count = 0
+
+            samples = list(item.get("payload_samples") or [])
+
+            if not samples and item.get("payload") is not None:
+                samples = [item["payload"]]
+            if skey not in storedGroups:
+                rep = {
+                    "url": pageUrl,
+                    "payload": item.get("payload"),
+                    "payload_samples": [],
+                    "status_code": item.get("status_code"),
+                    "indicator": indicator,
+                    "snippet": (item.get("snippet") or "")[:200],
+                    "count": 0,
+                    "type": typ,
+                }
+                rep["count"] += (count or 1)
+                for sample in samples:
+                    if sample is not None and len(rep["payload_samples"]) < XSS_MAX_SAMPLES:
+                        if sample not in rep["payload_samples"]:
+                            rep["payload_samples"].append(sample)
+
+                storedGroups[skey] = rep
+                emitted.append(rep)
+
+            else:
+                group = storedGroups[skey]
+                group["count"] += (count or 1)
+
+                for sample in samples:
+                    if sample is not None and len(group["payload_samples"]) < XSS_MAX_SAMPLES:
+                        if sample not in group["payload_samples"]:
+                            group["payload_samples"].append(sample)
+
+                try:
+                    if int(item.get("status_code") or 0) > int(group.get("status_code") or 0):
+                        group["status_code"] = item.get("status_code")
+                except Exception:
+                    pass
+
+            continue
+
         # Only collapse path and param findings to avoid XSS/ SQLI ect
         isFile = ( typ in COLLAPSIBLE_TYPES)
 
         if not isFile:
+            emitted.append(item)
             passthrough.append(item)
             continue
 
@@ -124,11 +191,12 @@ def collapseDuplicates(items):
                 "had_traversal": False,
             }
             groups[key] = rep
+            emitted.append(rep)
 
         group = groups[key]
         group["variant_path_count"] += 1
 
-        if len(group["variant_samples"]) < 5:
+        if len(group["variant_samples"]) < PATH_MAX_SAMPLES:
             group["variant_samples"].append(rawUrl)
 
         group["had_traversal"] = group["had_traversal"] or hadTraversal
@@ -148,9 +216,10 @@ def collapseDuplicates(items):
         except Exception:
             pass
 
-    collapsed = list(groups.values())
+        group["count"] = group["variant_path_count"]
+        group["payload_samples"] = group["variant_samples"]
 
-    return collapsed + passthrough
+    return emitted
 
 def autoSubmits(html, params):
     """

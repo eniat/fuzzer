@@ -106,6 +106,7 @@ xss:
     - "</script><script>window.__XSS_CANARY__=\"{CANARY}\"</script>"
     - "{CANARY}"
   dom_delay_seconds: 0.25
+  stored_settle_seconds: 1
   regex:
     script: "<script[^>]*>(?:(?!</script>).)*({token})(?:(?!</script>).)*</script>"
     attr: "\\bon\\w+\\s*=\\s*(['\\\"]).*?({token}).*?\\1"

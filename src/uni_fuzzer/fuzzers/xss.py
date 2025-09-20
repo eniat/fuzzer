@@ -191,13 +191,13 @@ class XSSFuzzer:
 
             # Collect results as requests complete
             for future in as_completed(tasks):
-                # If bail on first then bail
-                if self.bailEvent and self.bailEvent.is_set():
-                    break
 
                 out = future.result()
 
                 if not out or "data" not in out:
+                    # If bail on first then bail
+                    if self.bailEvent and self.bailEvent.is_set():
+                        break
                     continue
 
                 data = out["data"]
@@ -220,12 +220,19 @@ class XSSFuzzer:
                         "count": 1,
                         "type": "xss_param"
                     }
+                    # If bail on first then bail
+                    if self.bailEvent:
+                        self.bailEvent.set()
+                        return [results[resultsKey]]
                 else:
                     entry = results[resultsKey]
                     entry["count"] += 1
                     # Cap the examples
                     if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                         entry["payload_samples"].append(raw)
+                # If bail on first then bail
+                if self.bailEvent and self.bailEvent.is_set():
+                    break
 
         return list(results.values())
 
@@ -314,13 +321,13 @@ class XSSFuzzer:
 
                 # collect responses at end
                 for fut in as_completed(tasks):
-                    # If bail on first then bail
-                    if self.bailEvent and self.bailEvent.is_set():
-                        break
                     try:
                         res = fut.result()
 
                     except Exception:
+                        # If bail on first then bail
+                        if self.bailEvent and self.bailEvent.is_set():
+                            break
                         continue
 
                     if not res or "data" not in res:
@@ -345,12 +352,19 @@ class XSSFuzzer:
                             "count": 1,
                             "type": "xss_form"
                         }
+                        # If bail on first then bail
+                        if self.bailEvent:
+                            self.bailEvent.set()
+                            return [results[resultsKey]]
                     else:
                         entry = results[resultsKey]
                         entry["count"] += 1
                         # Cap the examples
                         if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                             entry["payload_samples"].append(raw)
+                    # If bail on first then bail
+                    if self.bailEvent and self.bailEvent.is_set():
+                        break
 
             return list(results.values())
 
@@ -360,7 +374,7 @@ class XSSFuzzer:
             Submits payload then revisits to see if payload still there
         """
         results = {}
-        pages = set()
+        pages = []
 
         # Prebuilding to remove multiple canary and quote calls
         prebuiltPayloads = []
@@ -393,7 +407,8 @@ class XSSFuzzer:
                     url = f"{parsed.scheme}://{parsed.netloc}{url}"
 
                 # Track the form to potentially revisit
-                pages.add(url)
+                if url not in pages:
+                    pages.append(url)
 
                 # Get baseline to check for submit buttons
                 base = baselineForm(self.session, url, self.headers)
@@ -456,17 +471,22 @@ class XSSFuzzer:
                     # Add final URL to revisit list
                     try:
                         if getattr(res, "url", None):
-                            pages.add(res.url)
+                            if res.url not in pages:
+                                pages.append(res.url)
                     except Exception:
                         pass
 
-                    pages.add(finUrl)
+                    if finUrl not in pages:
+                        pages.append(finUrl)
 
                     # Follow redirections after submitting form
                     if res.status_code in (301, 302, 303,307, 308):
                         loc = res.headers.get("Location")
                         if loc:
-                            pages.add(loc if loc.startswith("http")else urljoin(finUrl, loc))
+                            dest = loc if loc.startswith("http") else urljoin(finUrl, loc)
+                            if dest not in pages:
+                                pages.append(dest)
+
 
         # Merge extra endpoints
         if endpoints:
@@ -476,20 +496,31 @@ class XSSFuzzer:
             for end in endpoints:
                 if not end:
                     continue
-
-                pages.add(end if end.startswith("http") else f"{base}{end}")
+                dest = end if end.startswith("http") else f"{base}{end}"
+                if dest not in pages:
+                    pages.append(dest)
 
         # Prebuild marked payloads
         markedPayloads = [(raw, canary(raw, self.token)) for raw in self.payloads]
 
+        try:
+            time.sleep(cfg["xss"]["stored_settle_seconds"])
+        except Exception:
+            pass
+
         # Revisit collected pages
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
+
+            revisitHeaders = dict(self.headers)
+            revisitHeaders["Cache-Control"] = "no-cache"
+            revisitHeaders["Pragma"] = "no-cache"
+            revisitHeaders["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
             futToPage = {
                 executor.submit(
                     self.session.get,
                     page,
-                    headers=self.headers,
+                    headers=revisitHeaders,
                     timeout=cfg["http"]["timeout_get_seconds"],
                     allow_redirects=cfg["http"]["redirects"]["stored_xss"]
                 ): page
@@ -497,22 +528,24 @@ class XSSFuzzer:
             }
 
             for fut in as_completed(futToPage):
-
-                finUrl = futToPage[fut]
+                page = futToPage[fut]
                 try:
                     res = fut.result()
 
                 except Exception:
                     continue
 
+                finUrl = getattr(res, "url", page) or page
                 body = res.text or ""
                 low = body.lower()
                 lowU = unescape(body).lower()
                 lowQ = unquote_plus(body).lower()
 
-                # If no token at all continue
+                # If no token quick detect pass
                 if (self.tokenLow not in low) and (self.tokenLow not in lowU) and (self.tokenLow not in lowQ):
-                    continue
+                    ok, _ = detectXSS(body, self.token, self.token)
+                    if not ok:
+                        continue
 
                 # Check if payloads still persists
                 for raw, marked in markedPayloads:
@@ -532,7 +565,7 @@ class XSSFuzzer:
                         base = finUrl.split("?", 1)[0].split("#", 1)[0]
                         pageKey = (base.rstrip("/")).lower()
 
-                    ok, indicator = detectXSS(res.text, self.token, marked)
+                    ok, indicator = detectXSS(body, self.token, marked)
                     if ok:
                         # Check if reported before
                         pageInd = (pageKey, indicator or "N/A", marked)
@@ -554,17 +587,18 @@ class XSSFuzzer:
                                 "count": 1,
                                 "type": "xss_stored",
                             }
+                            # If bail on first then bail
+                            if self.bailEvent:
+                                self.bailEvent.set()
+                                return [results[resultsKey]]
                         else:
                             entry = results[resultsKey]
                             entry["count"] += 1
                             if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                                 entry["payload_samples"].append(raw)
-                        if self.bailEvent:
-                            self.bailEvent.set()
 
         return list(results.values())
-                        # Add break if you just want to see its vulnerable, without lists all successful payloads
-                        #break
+
 
     def domXSS(self, forms= None, endpoints= None):
         """

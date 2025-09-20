@@ -288,7 +288,7 @@ def run(args):
                     print(f"[Thread] XSS Form Fuzzing: {fullUrl}")
                     bail = threading.Event() if args.bail_on_hit else None
                     fuzzer = XSSFuzzer(
-                        baseUrl=args.start_url,
+                        baseUrl=fullUrl,
                         useCrawler=False,
                         wordlistPath=wordlistXss,
                         outputToFile=args.output_to_file,
@@ -310,7 +310,7 @@ def run(args):
                     print(f"[Thread] XSS Stored Fuzzing: {fullUrl}")
                     bail = threading.Event() if args.bail_on_hit else None
                     fuzzer = XSSFuzzer(
-                        baseUrl=args.start_url,
+                        baseUrl=fullUrl,
                         useCrawler= False,
                         wordlistPath=wordlistXss,
                         outputToFile=args.output_to_file,
