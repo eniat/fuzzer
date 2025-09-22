@@ -1,4 +1,9 @@
+import logging
 from sentence_transformers import SentenceTransformer, util
+
+from uni_fuzzer.core.utility import status
+
+log = logging.getLogger(__name__)
 
 def filterML(wordlistPath, prompt, similarityThreshold=0.25):
     """
@@ -9,10 +14,13 @@ def filterML(wordlistPath, prompt, similarityThreshold=0.25):
         with open(wordlistPath, 'r', encoding='utf-8') as f:
             payloads = [line.strip() for line in f if line.strip()]
 
-    except Exception as e:
-        raise RuntimeError(f"[-] Failed to read wordlist from {wordlistPath}: {e}")
+    except Exception:
+        log.debug("filterML: failed to read wordlist from %s", wordlistPath, exc_info=True)
+        status("[-] Failed to read wordlist")
+        raise
 
     if not payloads:
+        log.debug("filterML: no payloads found, returning empty list")
         return []
 
     # Load model ***subject to change***

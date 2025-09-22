@@ -1,3 +1,4 @@
+import logging
 
 from urllib.parse import urljoin
 
@@ -5,6 +6,7 @@ from uni_fuzzer.core.utility import get_cfg, autoSubmits
 
 cfg = get_cfg()
 TIMING_BASELINE_PROBES = cfg["sqli"]["timing_baseline_probes"]
+log = logging.getLogger(__name__)
 
 def baselineForm(session, url, headers):
     """
@@ -20,6 +22,7 @@ def baselineForm(session, url, headers):
         return {"content": res.text or ""}
 
     except Exception:
+        log.debug("baselineForm GET failed for %s", url, exc_info=True)
         return {"content": ""}
 
 def getBaseline(session, baseUrl, headers):
@@ -36,6 +39,7 @@ def getBaseline(session, baseUrl, headers):
             "content": res.text
         }
     except Exception:
+        log.debug("getBaseline request failed for %s", testUrl, exc_info=True)
         return {"content": ""}
 
 def sqliBaseline( session, headers, endpoint, method, fields):
@@ -82,6 +86,7 @@ def sqliBaseline( session, headers, endpoint, method, fields):
         return baseText, baseStatus
 
     except Exception:
+        log.debug("sqliBaseline failed for %s %s", method, endpoint, exc_info=True)
         return "",0
 
 def getBlindBaseline(session, headers, endpoint, method, fields, probes=TIMING_BASELINE_PROBES):
@@ -146,4 +151,5 @@ def getBlindBaseline(session, headers, endpoint, method, fields, probes=TIMING_B
         return elapses[mid] if len(elapses) %2 == 1 else (elapses[mid - 1] + elapses[mid]) /2.0
 
     except Exception:
+        log.debug("getBlindBaseline failed for %s %s", method, endpoint, exc_info=True)
         return 0.0

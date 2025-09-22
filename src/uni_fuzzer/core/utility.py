@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import re
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse, unquote
 import yaml
 import posixpath
+
+log = logging.getLogger(__name__)
 
 @lru_cache(maxsize=1)
 
@@ -90,6 +93,7 @@ def collapseDuplicates(items):
             try:
                 count = int(item.get("count") or 0)
             except Exception:
+                log.debug("Failed to parse count (defaulting to 0)", exc_info=True)
                 count = 0
 
             samples = list(item.get("payload_samples") or [])
@@ -129,7 +133,7 @@ def collapseDuplicates(items):
                     if int(item.get("status_code") or 0) > int(group.get("status_code") or 0):
                         group["status_code"] = item.get("status_code")
                 except Exception:
-                    pass
+                    log.debug("Failed to update status_code in stored XSS group", exc_info=True)
 
             continue
 
@@ -214,7 +218,7 @@ def collapseDuplicates(items):
                 group["status_code"] = item.get("status_code")
 
         except Exception:
-            pass
+            log.debug("Failed to update status_code in path/param group", exc_info=True)
 
         group["count"] = group["variant_path_count"]
         group["payload_samples"] = group["variant_samples"]
@@ -404,3 +408,29 @@ def extractIdentifier(el):
 
 
     return raw.strip()
+
+def status (msg, *args):
+    """
+        To avoid duplicates when console logging is on
+    """
+    # Prepare message
+    text = (msg % args) if args else msg
+
+    rootLogger = logging.getLogger()
+    isConfigured = getattr(rootLogger, "_uf_configured", False)
+    hasConsole = False
+
+    # if it is configured then check if console stderr is attached
+    if isConfigured:
+        for hand in rootLogger.handlers:
+            if isinstance(hand, logging.StreamHandler) and not hasattr(hand, "baseFilename"):
+                hasConsole = True
+                break
+
+    # If it is configured then send to logger
+    if isConfigured:
+        logging.getLogger("status").info(text)
+
+    # If not then print to console so user can see
+    if not isConfigured or not hasConsole:
+        print(text, flush=True)

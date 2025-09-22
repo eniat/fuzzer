@@ -1,3 +1,4 @@
+import logging
 from html import unescape
 from urllib.parse import quote
 
@@ -5,6 +6,7 @@ from uni_fuzzer.core.utility import get_cfg
 from uni_fuzzer.fuzzers.detection import detectSQLiDiff
 
 cfg = get_cfg()
+log = logging.getLogger(__name__)
 
 def probeReactivity(session, url, method, fields, fuzzField, headers):
     """
@@ -63,6 +65,7 @@ def probeReactivity(session, url, method, fields, fuzzField, headers):
             return True
 
     except Exception:
+        log.debug("probeReactivity failed for %s %s", method, url, exc_info=True)
         pass
 
     return False
@@ -84,6 +87,7 @@ def probeDom(driver, tokenLow):
         return { gflag: gflag.includes(t), ls: ls.includes(t), ss: ss.includes(t), el };""", tokenLow) or {}
 
     except Exception:
+        log.debug("probeDom JS execution failed", exc_info=True)
         return {}
 
 def probeReflexivity(session, url,method, fields, fuzzField, headers, token):
@@ -111,6 +115,7 @@ def probeReflexivity(session, url,method, fields, fuzzField, headers, token):
             return True
 
     except Exception:
+        log.debug("probeReflexivity failed for %s %s", method, url, exc_info=True)
         pass
 
     return False

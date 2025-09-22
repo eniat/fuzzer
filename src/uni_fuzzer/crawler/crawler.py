@@ -1,5 +1,6 @@
 import requests
 import time
+import logging
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions
 from selenium import webdriver
@@ -12,9 +13,10 @@ from requests.adapters import HTTPAdapter
 
 from uni_fuzzer.auth.auth import seleniumLogin, login
 
-from uni_fuzzer.core.utility import get_cfg, extractIdentifier
+from uni_fuzzer.core.utility import get_cfg, extractIdentifier, status
 cfg = get_cfg()
 
+log = logging.getLogger(__name__)
 
 class Crawler:
 
@@ -68,7 +70,7 @@ class Crawler:
                 self.loginPath
             )
             if not ok:
-                print("[-] HTTP login failed ")
+                status("[!] HTTP login failed"); log.warning("HTTP login failed")
 
         # Static Crawl, if either the mode is static or both
         if self.mode in ('static', 'both'):
@@ -109,16 +111,6 @@ class Crawler:
         for (path, method), fieldsSet in formsMap.items():
             self.discoveredForms.append({"url": path, "method": method, "formFields": list(fieldsSet)})
 
-        # If 'outputToFile=True' creates a file listing the output, For debugging
-        if self.outputToFile:
-            with open("crawlerOutput.txt", "w") as f:
-                f.write("Discovered Endpoints:\n")
-                for ep in self.discoveredEndpoints:
-                    f.write(f"{ep['method']} {ep['url']} params={ep['params']}\n")
-                f.write("\n Discovered Forms:\n ")
-                for fm in self.discoveredForms:
-                    f.write(f"{fm['method']} {fm['url']} fields={fm['formFields']}\n")
-
         return self.discoveredEndpoints, self.discoveredForms
 
 
@@ -139,10 +131,10 @@ class Crawler:
             if self.maxPages and pagesCrawled >= self.maxPages:
                 break
             try:
-                response = self.session.get(currentUrl)
-            except requests.RequestException as e:
+                response = self.session.get(currentUrl,timeout=cfg["http"]["crawl_get"])
+            except requests.RequestException:
                 # On error requesting notify
-                print (f"Request Failed: {e}")
+                log.debug("Request failed during crawl", exc_info=True)
                 continue
             if response.status_code != 200:
                 #Skips non OK pages
@@ -298,9 +290,10 @@ class Crawler:
                                 payload.setdefault(sbn, sbv)
 
                             try:
-                                res = self.session.post(actionUrl, data=payload, allow_redirects=True)
+                                res = self.session.post(actionUrl, data=payload, allow_redirects=True, timeout=cfg["http"]["crawl_post"])
 
                             except Exception:
+                                log.debug("Submitting form via POST failed: %s", actionUrl, exc_info=True)
                                 continue
 
                             # If not 200 OK then continue
@@ -347,6 +340,7 @@ class Crawler:
                                 staticForms.append({"url": formPath2, "method": method2, "formFields": fields2})
 
                 except Exception:
+                    log.debug("Static crawl parsing failed on %s", currentUrl, exc_info=True)
                     pass
 
             pagesCrawled += 1
@@ -394,7 +388,7 @@ class Crawler:
                 loginPath=self.loginPath
             )
             if not ok:
-                print("[-] Selenium login failed!")
+                status("[!] Selenium login failed"); log.warning("Selenium login failed")
             else:
                 # Copies cookies into Cookie Jar
                 jar = RequestsCookieJar()
@@ -433,6 +427,7 @@ class Crawler:
                     # wait for menu to expand
                     WebDriverWait(driver, 0.5).until(expected_conditions.presence_of_element_located((By.TAG_NAME, "body")))
                 except Exception:
+                    log.debug("Menu expand click failed", exc_info=True)
                     # no menu found or click failed
                     pass
 

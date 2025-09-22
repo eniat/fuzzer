@@ -1,6 +1,6 @@
 from pathlib import Path
 
-def crawlerPrint(endpoints, forms, output_to_file=False, filename="CrawlerOutput.txt"):
+def crawlerPrint(endpoints, forms, output_to_file=False, filename="crawler-output.txt"):
     """
         Prints crawler results to console and file
     """
@@ -47,7 +47,7 @@ def crawlerPrint(endpoints, forms, output_to_file=False, filename="CrawlerOutput
 
 
 
-def fuzzerPrint(vulnerabilities, output_to_file= False, filename="FuzzerOutput.txt"):
+def fuzzerPrint(vulnerabilities, output_to_file= False, filename="fuzzer-output.txt"):
     """
         Prints fuzzer results to console and file
     """

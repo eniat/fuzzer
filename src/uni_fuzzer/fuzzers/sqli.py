@@ -1,5 +1,6 @@
 import requests
 import threading
+import logging
 from urllib.parse import urlparse, quote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
@@ -8,8 +9,9 @@ from uni_fuzzer.core.probes import probeReactivity
 from uni_fuzzer.auth.auth import login
 from uni_fuzzer.fuzzers.detection import detectSQLiBlind, detectSQLiDiff, detectSQLError
 from uni_fuzzer.core.baseline import sqliBaseline, getBlindBaseline
-from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits, isBlindPayload, buildBooleanPayloads, expandTimeToken
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits, isBlindPayload, buildBooleanPayloads, expandTimeToken, status
 cfg = get_cfg()
+log = logging.getLogger(__name__)
 
 SQL = cfg["sqli"]["error_signatures"]
 MAX_SAMPLES_PER_GROUP = cfg["sqli"]["max_samples_per_group"]
@@ -54,7 +56,8 @@ class SQLiFuzzer:
         if self.auth and self.loginUsername and self.loginPassword:
             ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
             if not ok:
-                print("[-] HTTP login in SQLi Fuzzer failed")
+                status("[!] HTTP login in SQLi Fuzzer failed")
+                log.warning("HTTP login in SQLi Fuzzer failed")
 
     def SQLiFuzz(self, forms):
         """
@@ -133,6 +136,8 @@ class SQLiFuzzer:
                         res = fut.result()
 
                     except Exception:
+                        finUrl, payload = ctx.get(fut, ("<unknown>", "<unknown>"))
+                        log.debug("SQLi future failed for %s payload=%s", finUrl, payload, exc_info=True)
                         continue
 
                     finUrl, payload = ctx[fut]
@@ -196,7 +201,10 @@ class SQLiFuzzer:
                                     if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                                         entry["payload_samples"].append(payload)
                                 if self.bailEvent:
-                                    self.bailEvent.set()
+                                    try:
+                                        self.bailEvent.set()
+                                    except Exception:
+                                        log.debug("Failed to set bailEvent in SQLiFuzz", exc_info=True)
         return list(self.vulnerableForms.values())
 
     def SQLiBlindFuzz(self, forms):
@@ -283,10 +291,10 @@ class SQLiFuzzer:
                         logParamsT = [f"{k}={quote(str(v), safe='')}" for k, v in paramsTrue.items()]
                         logParamsF = [f"{k}={quote(str(v), safe='')}" for k, v in paramsFalse.items()]
 
-                        seperator = "&" if "?" in url else "?"
+                        separator = "&" if "?" in url else "?"
 
-                        fullUrlT = f"{url}{seperator}{'&'.join(logParamsT)}"
-                        fullUrlF = f"{url}{seperator}{'&'.join(logParamsF)}"
+                        fullUrlT = f"{url}{separator}{'&'.join(logParamsT)}"
+                        fullUrlF = f"{url}{separator}{'&'.join(logParamsF)}"
 
                         futTrue = executor.submit(self.session.get, url, params=paramsTrue, headers=self.headers, timeout=cfg["sqli"]["timeout_blind"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
                         futFalse = executor.submit(self.session.get, url, params=paramsFalse, headers=self.headers,timeout=cfg["sqli"]["timeout_blind"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
@@ -307,6 +315,7 @@ class SQLiFuzzer:
                     try:
                         res = fut.result()
                     except Exception:
+                        log.debug("SQLi blind future failed for %s", finUrl, exc_info=True)
                         continue
 
                     body = res.text or ""
@@ -361,7 +370,10 @@ class SQLiFuzzer:
                                     if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                                         entry["payload_samples"].append(payloadUsed)
                                 if self.bailEvent:
-                                    self.bailEvent.set()
+                                    try:
+                                        self.bailEvent.set()
+                                    except Exception:
+                                        log.debug("Failed to set bailEvent in SQLiBlindFuzz (boolean)", exc_info=True)
 
                 # Sequentially fuzz for blind timing
                 baselineMs = getBlindBaseline(self.session, self.headers,url, method, fields)
@@ -424,6 +436,7 @@ class SQLiFuzzer:
                                     trialElapses.append(res.elapsed.total_seconds() * 1000.0)
 
                                 except Exception:
+                                    log.debug("Timing trial request failed for %s", url, exc_info=True)
                                     continue
 
                             if not trialElapses:
@@ -474,6 +487,7 @@ class SQLiFuzzer:
                                         )
 
                                 except Exception:
+                                    log.debug("Timing confirm request failed for %s", url, exc_info=True)
                                     continue
 
                                 # Confirm the timing
@@ -506,6 +520,8 @@ class SQLiFuzzer:
                                         if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
                                             entry["payload_samples"].append(payload)
                                     if self.bailEvent:
-                                        self.bailEvent.set()
-
+                                        try:
+                                            self.bailEvent.set()
+                                        except Exception:
+                                            log.debug("Failed to set bailEvent in SQLiBlindFuzz (timing)",exc_info=True)
             return list(self.vulnerableForms.values())

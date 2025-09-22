@@ -25,13 +25,18 @@ def buildParser():
     parser.add_argument("-ws","--swordlist", type=str, help="Wordlist for SQLi fuzzing")
     parser.add_argument("-A","--all", action="store_true", help="Run all fuzzers ")
     parser.add_argument("-o","--output-to-file", action="store_true", help="Save output to a file")
-    parser.add_argument("-l","--llm", type =str, help="Natural language prompt to filter the wordlist using local ML")
+    parser.add_argument("-l","--llm", type =str, help="Natural language prompt to filter the default wordlist using local ML")
     parser.add_argument("-a","--auth", action="store_true", help="Use if webapp is behind a login page")
     parser.add_argument("-u","--username", type=str, help="Username for Selenium/HTTP login")
     parser.add_argument("-pw","--password", type=str, help="Password for Selenium/HTTP login")
     parser.add_argument("-k","--login-path", type=str, help="Login path or absolute URL")
     parser.add_argument("-R","--report-all", action="store_true", default=False, help="Include potential and path 'interesting' findings in the report.")
     parser.add_argument("-B", "--bail-on-hit", action="store_true", help="Stop fuzzing as soon as the first hit is detected.")
+    parser.add_argument("-L", "--log", action="store_true", help="Enable logging")
+    parser.add_argument("-ll", "--log-level", default="INFO", choices=["DEBUG", "INFO", "DEBUG"], help="Logging level")
+    parser.add_argument("-lf", "--log-file", default="uni-fuzzer.log", help="set the log file name. default uni-fuzzer.log")
+    parser.add_argument("-J", "--log-json", action="store_true", help="Log as JSON format")
+    parser.add_argument("-C", "--log-console", action="store_true", help="Also log to console")
 
     return parser
 

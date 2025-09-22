@@ -1,5 +1,6 @@
 import requests
 import time
+import logging
 from urllib.parse import urljoin, urlparse, quote, unquote_plus
 from uuid import uuid4
 from html import unescape
@@ -15,8 +16,9 @@ from uni_fuzzer.auth.auth import seleniumLogin, login
 from uni_fuzzer.core.baseline import baselineForm
 from uni_fuzzer.fuzzers.detection import detectXSS
 
-from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits, canary
+from uni_fuzzer.core.utility import get_cfg, isFuzzableField, loadWordlist, autoSubmits, canary, status
 cfg = get_cfg()
+log = logging.getLogger(__name__)
 
 # To avoid duplicate hits on page visits
 _REPORTED_STORED_KEYS = {}
@@ -72,7 +74,8 @@ class XSSFuzzer:
                 headers=None
             )
             if not ok:
-                print("[-] HTTP login in XSSFuzzer failed")
+                status("[!] HTTP login in XSSFuzzer failed")
+                log.warning("HTTP login in XSSFuzzer failed")
 
 
     def sendRequest(self, url, payload=None, markedPayload= None, method="GET", data=None):
@@ -83,13 +86,14 @@ class XSSFuzzer:
             if self.bailEvent and self.bailEvent.is_set():
                 return None
             if method == "POST":
-                response = self.session.post( url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["submit"])
+                response = self.session.post( url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_post_seconds"], allow_redirects=cfg["http"]["redirects"]["submit"])
 
             else:
                 response = self.session.get(url, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
 
             ctype = (response.headers.get("Content-Type") or "").lower()
             if ctype and ("html" not in ctype and "xml" not in ctype and "javascript" not in ctype):
+                log.debug("Skipping non-HTML content-type for %s: %s", url, ctype)
                 return None
 
             content = response.content or b""
@@ -115,15 +119,15 @@ class XSSFuzzer:
                     try:
                         self.bailEvent.set()
                     except Exception:
-                        pass
+                        log.debug("Failed to set bailEvent in sendRequest", exc_info=True)
                 return {"type": "vulnerable", "data": result}
 
         except requests.exceptions.Timeout:
             # When fuzzing large endpoints timeouts overwhelm, disable if needed
-            pass
+            log.debug("Request timed out for %s", url)
 
         except Exception:
-            pass
+            log.debug("sendRequest failed for %s", url, exc_info=True)
 
         return None
 
@@ -135,7 +139,8 @@ class XSSFuzzer:
 
         # Only fuzz if fuzz in query
         if "FUZZ" not in parsed.query:
-            print("[-] No 'FUZZ' keyword found")
+            status("[-] No 'FUZZ' keyword found")
+            log.info("No 'FUZZ' keyword found in query for %s", self.baseUrl)
             return []
 
         # Reconstruct base URL without query
@@ -170,9 +175,11 @@ class XSSFuzzer:
             body = res.text or ""
 
             if probe.lower() not in body.lower() and unescape(body).lower().find(probe.lower()) == -1:
+                log.debug("Probe not reflected for %s", probeUrl)
                 return []
 
         except Exception:
+            log.debug("Probe request failed for %s", probeUrl, exc_info=True)
             return []
 
         tasks = []
@@ -191,8 +198,13 @@ class XSSFuzzer:
 
             # Collect results as requests complete
             for future in as_completed(tasks):
-
-                out = future.result()
+                try:
+                    out = future.result()
+                except Exception:
+                    log.debug("Param future failed", exc_info=True)
+                    if self.bailEvent and self.bailEvent.is_set():
+                        break
+                    continue
 
                 if not out or "data" not in out:
                     # If bail on first then bail
@@ -265,6 +277,7 @@ class XSSFuzzer:
 
                 # Skip invalid form objects
                 if not url or not fields:
+                    log.debug("Skipping invalid form object (url/fields missing): %s", form)
                     continue
 
                 # Normalize Url
@@ -275,10 +288,12 @@ class XSSFuzzer:
                 fuzzField = [f for f in fields if isFuzzableField(f)]
 
                 if not fuzzField:
+                    log.debug("No fuzzable fields for form %s", url)
                     continue
 
                 # Singular probe to check if reflective
                 if not probeReflexivity(self.session, url, method, fields, fuzzField, self.headers, self.token):
+                    log.debug("Form not reflective %s", url)
                     continue
 
                 # Get baseline to check for submit buttons
@@ -328,6 +343,7 @@ class XSSFuzzer:
                         # If bail on first then bail
                         if self.bailEvent and self.bailEvent.is_set():
                             break
+                        log.debug("Form future failed for %s", url, exc_info=True)
                         continue
 
                     if not res or "data" not in res:
@@ -432,7 +448,7 @@ class XSSFuzzer:
 
                         data = autoSubmits(baseHtml, data)
 
-                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
+                        fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_post_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
 
                         tasks.append(fut)
                         ctx[fut] = (url,raw,marked)
@@ -464,6 +480,7 @@ class XSSFuzzer:
                         res = fut.result()
 
                     except Exception:
+                        log.debug("Stored submit future failed for %s", url, exc_info=True)
                         continue
 
                     finUrl, raw, marked = ctx[fut]
@@ -474,7 +491,7 @@ class XSSFuzzer:
                             if res.url not in pages:
                                 pages.append(res.url)
                     except Exception:
-                        pass
+                        log.debug("Failed to extract res.url; finUrl=%s", finUrl, exc_info=True)
 
                     if finUrl not in pages:
                         pages.append(finUrl)
@@ -506,7 +523,7 @@ class XSSFuzzer:
         try:
             time.sleep(cfg["xss"]["stored_settle_seconds"])
         except Exception:
-            pass
+            log.debug("Sleep interrupted during stored settle", exc_info=True)
 
         # Revisit collected pages
         with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
@@ -533,6 +550,7 @@ class XSSFuzzer:
                     res = fut.result()
 
                 except Exception:
+                    log.debug("Revisit request failed for %s", page, exc_info=True)
                     continue
 
                 finUrl = getattr(res, "url", page) or page
@@ -635,8 +653,8 @@ class XSSFuzzer:
                     for field in fields:
                         parts.append(f"{field}={quote(marked, safe='')}")
 
-                    seperator = "&" if "?" in url else "?"
-                    candidates.append((f"{url}{seperator}{'&'.join(parts)}", raw, marked))
+                    separator = "&" if "?" in url else "?"
+                    candidates.append((f"{url}{separator}{'&'.join(parts)}", raw, marked))
                     candidates.append((f"{url}#{quote(marked, safe='')}", raw, marked))
 
         if endpoints:
@@ -658,8 +676,8 @@ class XSSFuzzer:
                 for raw in chosenPayloads:
                     marked = raw.replace("{CANARY}", self.token)
                     parts = [f"{p}={quote(marked,safe='')}" for p in params]
-                    seperator = "&" if "?" in fullUrl else "?"
-                    candidates.append((f"{fullUrl}{seperator}{'&'.join(parts)}", raw, marked))
+                    separator = "&" if "?" in fullUrl else "?"
+                    candidates.append((f"{fullUrl}{separator}{'&'.join(parts)}", raw, marked))
                     candidates.append((f"{fullUrl}#{quote(marked, safe='')}", raw, marked))
 
         # If no fuzzable URLs found then return empty
@@ -705,14 +723,14 @@ class XSSFuzzer:
                         try:
                             ck["expiry"] = int(exp)
                         except Exception:
-                            pass
+                            log.debug("Cookie expiry conversion failed ", exc_info=True)
 
                     try:
                         driver.add_cookie(ck)
                     except Exception:
-                        pass
+                        log.debug("driver.add_cookie failed: %s", ck, exc_info=True)
             except Exception:
-                pass
+                log.debug("Preloading origin & cookie copy failed", exc_info=True)
             # If selenium login true
             if self.auth and self.loginUsername and self.loginPassword:
 
@@ -726,6 +744,8 @@ class XSSFuzzer:
                         loginPath=self.loginPath,
                         selectors=None
                 ):
+                    status("[!] Selenium login failed")
+                    log.warning("Selenium login failed during domXSS")
                     return list(results.values())
 
                 try:
@@ -740,7 +760,7 @@ class XSSFuzzer:
                     self.session.cookies.update(jar)
 
                 except Exception:
-                    pass
+                    log.debug("Copying cookies from driver back to session failed", exc_info=True)
 
 
             seen = set()
@@ -802,7 +822,7 @@ class XSSFuzzer:
                                     continue
 
                         except Exception:
-                            pass
+                            log.debug("Hash re-trigger attempt failed", exc_info=True)
 
                         if not indicator:
                             continue
@@ -833,8 +853,12 @@ class XSSFuzzer:
                             entry["payload_samples"].append(raw)
 
                 except Exception:
+                    log.debug("DOM candidate failed for %s", finUrl, exc_info=True)
                     continue
         finally:
-            driver.quit()
+            try:
+                driver.quit()
+            except Exception:
+                log.debug("driver.quit() failed", exc_info=True)
 
         return list(results.values())

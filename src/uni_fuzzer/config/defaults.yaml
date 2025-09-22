@@ -3,6 +3,8 @@ http:
   add_referer: true
   timeout_get_seconds: 2
   timeout_post_seconds: 2
+  crawl_get: 3
+  crawl_post: 3
   redirects:
     baseline_get: true
     baseline_post: true
@@ -227,3 +229,8 @@ auth:
     username_field: "login"
     password_field: "password"
     submit_name: "form"
+
+logging:
+  format: "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
+  json_format: '{"ts":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s","file":"%(filename)s","line":%(lineno)d}'
+  date_format: "%Y-%m-%d %H:%M:%S"

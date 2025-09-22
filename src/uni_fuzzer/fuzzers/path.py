@@ -1,5 +1,6 @@
 import requests
 import threading
+import logging
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePosixPath
@@ -9,8 +10,10 @@ from requests.adapters import HTTPAdapter
 from uni_fuzzer.fuzzers.detection import detectPathTraversal
 from uni_fuzzer.core.baseline import getBaseline
 from uni_fuzzer.auth.auth import login
-from uni_fuzzer.core.utility import get_cfg, loadWordlist
+from uni_fuzzer.core.utility import get_cfg, loadWordlist, status
 cfg = get_cfg()
+
+log = logging.getLogger(__name__)
 
 MAX_SAMPLES_PER_GROUP = cfg["path_traversal"]["max_samples_per_group"]
 
@@ -54,9 +57,10 @@ class PathFuzzer:
         if self.auth and self.loginUsername and self.loginPassword:
             ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
             if not ok :
-                print("[-] HTTP login in PathFuzzer failed")
+                status("[!] HTTP login in PathFuzzer failed")
+                log.warning("HTTP login in PathFuzzer failed")
 
-        self.baseline = getBaseline(self.session, baseUrl, self.headers)
+        self.baseline = getBaseline(self.session, self.baseUrl, self.headers)
 
     def  fuzzPath(self, path, currDepth= 0):
         """
@@ -113,11 +117,13 @@ class PathFuzzer:
                 tasks.append(executor.submit( self.sendRequest, targetUrl, currDepth,isParamFuzzing= False, payload =payload))
 
             for future in as_completed(tasks):
-                result  = future.result()
+                try:
+                    result = future.result()
+                except Exception:
+                    log.debug("Path fuzz future failed", exc_info=True)
+                    continue
                 if result and result["type"] == "interesting_200":
-                    interestingResults.append((
-                        result["data"]["url"],
-                        result["data"]["depth"]))
+                    interestingResults.append((result["data"]["url"], result["data"]["depth"]))
         # If bail on first then bail
         if self.bailEvent and self.bailEvent.is_set():
             return
@@ -135,7 +141,10 @@ class PathFuzzer:
                 futures.append(executor.submit(self.fuzzPath, interestingPath, nextDepth))
 
             for future in as_completed(futures):
-                future.result()
+                try:
+                    future.result()
+                except Exception:
+                    log.debug("Path recursive future failed", exc_info=True)
 
     def sendRequest(self, url, depth, isParamFuzzing= False,payload= None):
         """
@@ -193,7 +202,7 @@ class PathFuzzer:
                             try:
                                 self.bailEvent.set()
                             except Exception:
-                                pass
+                                log.debug("Failed to set bailEvent in PathFuzzer", exc_info=True)
 
                     else:
                         entry = self.vulnerablePaths[resultsKey]
@@ -233,10 +242,10 @@ class PathFuzzer:
 
         except requests.exceptions.Timeout:
             # When fuzzing large endpoints timeouts overwhelm, disable if needed
-            pass
+            log.debug("Path request timeout for %s", url, exc_info=True)
 
         except Exception:
-            pass
+            log.debug("Path request failed for %s", url, exc_info=True)
 
         return None
 
@@ -265,7 +274,10 @@ class PathFuzzer:
                 tasks.append(executor.submit(self.sendRequest, fullUrl, 0, isParamFuzzing=True, payload= payload))
 
             for future in as_completed(tasks):
-                _ = future.result()
+                try:
+                    _ = future.result()
+                except Exception:
+                    log.debug("Param fuzz future failed", exc_info=True)
 
         grouped = [v for (k_url, k_ind, k_kind), v in self.vulnerablePaths.items() if k_kind == "param"]
         return grouped

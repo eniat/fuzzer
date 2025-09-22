@@ -1,5 +1,6 @@
 import time
 import requests
+import logging
 
 from urllib.parse import urljoin,urlparse
 from requests.adapters import HTTPAdapter
@@ -8,8 +9,10 @@ from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.wait import WebDriverWait
 from bs4 import BeautifulSoup
 
-from uni_fuzzer.core.utility import get_cfg
+from uni_fuzzer.core.utility import get_cfg, status
 cfg = get_cfg()
+
+log = logging.getLogger(__name__)
 
 def seleniumLogin(driver, baseUrl, username, password, loginPath=None, selectors=None):
     """
@@ -60,8 +63,9 @@ def seleniumLogin(driver, baseUrl, username, password, loginPath=None, selectors
 
         return True
 
-    except Exception as e:
-        print(f"[!] Selenium login failed: {e}")
+    except Exception:
+        status("[!] Selenium login failed")
+        log.warning("Selenium login failed", exc_info=True)
         return False
 
 def login(session, baseUrl, username, password, loginPath=None, selectors=None, headers=None):
@@ -146,7 +150,9 @@ def login(session, baseUrl, username, password, loginPath=None, selectors=None, 
         curPath = urlparse(gr.url).path or "/"
         return lpPath != curPath
 
-    except Exception:
+    except Exception :
+        status("[!] HTTP login failed")
+        log.warning("HTTP login failed", exc_info=True)
         return False
 
 def buildSessions(auth, username, password, start_url, login_path):
@@ -176,9 +182,12 @@ def buildSessions(auth, username, password, start_url, login_path):
             try:
                 ok = login(sess, start_url, username, password, login_path)
                 if not ok:
-                    print("[-] Login failed")
+                    status("[-] HTTP login failed")
+                    log.warning("HTTP login failed")
 
             except Exception:
+                status("[!] Session login failed")
+                log.debug("Session login failed", exc_info=True)
                 continue
             # Delay to not cause failures
             time.sleep(0.05 * (i + 1))
