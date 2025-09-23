@@ -5,14 +5,14 @@ from pathlib import PurePosixPath
 from uuid import uuid4
 import logging
 
-from uni_fuzzer.core.logging import setupLogging
+from uni_fuzzer.core.logging_setup import setupLogging
 from uni_fuzzer.auth.auth import buildSessions
 from uni_fuzzer.crawler.crawler import Crawler
 from uni_fuzzer.fuzzers.path import PathFuzzer
 from uni_fuzzer.llm.semantic_llm import filterML
 from uni_fuzzer.fuzzers.xss import XSSFuzzer
 from uni_fuzzer.fuzzers.sqli import SQLiFuzzer
-from uni_fuzzer.core.reporting import crawlerPrint, fuzzerPrint
+from uni_fuzzer.core.reporting import crawlerPrint, fuzzerPrint, crawlerJson, fuzzerJson, Finding
 from uni_fuzzer.core.utility import get_cfg, isFuzzableField, collapseDuplicates, sortWordlist, getDirectories, getParents, status
 cfg = get_cfg()
 
@@ -26,7 +26,8 @@ def run(args):
             logFile=args.log_file,
             toConsole=args.log_console,
             jsonMode=args.log_json,
-            backUpCount=1)
+            maxBytes=6_500_000,
+            backUpCount=3)
 
     status("Starting run")
 
@@ -112,6 +113,8 @@ def run(args):
         endpoints, forms = crawler.crawl(args.start_url)
 
         crawlerPrint(endpoints, forms, output_to_file=args.output_to_file)
+        if args.output_to_json:
+            crawlerJson(endpoints, forms, output_to_json=True)
 
     else:
 
@@ -120,6 +123,7 @@ def run(args):
             # Global storage to remove duplicate fuzzing
             globalVisitedPaths = set()
             globalVisitedFuzzPaths = set()
+            globalVisitedLock = threading.Lock()
 
             allVulnerabilities = []
             runToken = f"XSSCanary-{uuid4().hex[:8]}"
@@ -140,8 +144,11 @@ def run(args):
             endpoints, forms = crawler.crawl(args.start_url)
 
             crawlerPrint(endpoints, forms, output_to_file=args.output_to_file)
+            if args.output_to_json:
+                crawlerJson(endpoints, forms, output_to_json=True)
 
-            rawDomForms = forms[:]
+            if args.xss_dom or args.all:
+                rawDomForms = forms[:]
 
             forms = [
                 f for f in forms
@@ -157,26 +164,6 @@ def run(args):
             # Derive base url for relative links
             parsed = urlparse(args.start_url)
             base = f"{parsed.scheme}://{parsed.netloc}"
-
-            if args.fuzz_paths:
-                # Filter to unique base directories
-                uniqueUrls = {}
-                for ep in endpoints:
-                    parsedPath = urlparse(ep["url"]).path or "/"
-                    baseDir = str(PurePosixPath(getDirectories(parsedPath))).rstrip("/")
-
-                    if baseDir not in uniqueUrls:
-                        uniqueUrls[baseDir] = ep
-                UniqueEndpoints = list(uniqueUrls.values())
-
-            else:
-                UniqueEndpoints = endpoints
-
-            #  Add to visited directories
-            for ep in UniqueEndpoints:
-                p = urlparse(ep["url"]).path or "/"
-                d = getDirectories(p)
-                globalVisitedPaths.add(d)
 
             status(f"[+] Beginning fuzzing... \n")
 
@@ -217,19 +204,20 @@ def run(args):
                     )
                     path_fuzzer.visitedPaths = globalVisitedPaths
                     path_fuzzer.visitedFuzzPaths = globalVisitedFuzzPaths
+                    path_fuzzer.lock = globalVisitedLock
 
-                    for path in getParents(fullUrl):
+                    for path in getParents(urlparse(fullUrl).path):
                         path_fuzzer.fuzzPath(path)
 
-                    if fuzzer.vulnerablePaths:
+                    if path_fuzzer.vulnerablePaths:
                         results.extend(list(path_fuzzer.vulnerablePaths.values()))
 
 
                     if args.report_all and getattr(path_fuzzer, "interesting200", None):
-                        results.extend(fuzzer.interesting200)
+                        results.extend(path_fuzzer.interesting200)
 
                     if args.report_all and getattr(path_fuzzer, "interesting", None):
-                        results.extend(fuzzer.interesting)
+                        results.extend(path_fuzzer.interesting)
 
                 if args.fuzz_params and params:
 
@@ -250,6 +238,7 @@ def run(args):
                     )
                     param_fuzzer.visitedPaths = globalVisitedPaths
                     param_fuzzer.visitedFuzzPaths = globalVisitedFuzzPaths
+                    param_fuzzer.lock = globalVisitedLock
 
                     res = param_fuzzer.fuzzParams()
                     if res:
@@ -363,10 +352,7 @@ def run(args):
                     res = sqli_form_fuzzer.SQLiFuzz([form])
 
                     if res:
-                        if args.report_all:
-                            results.extend(res)
-                        else:
-                            results.extend([v for v in res if v.get("type") != "potential_sqli"])
+                        results.extend(res if args.report_all else [v for v in res if v.type != "sqli_potential"])
 
                 if args.fuzz_sqli_b:
 
@@ -420,9 +406,15 @@ def run(args):
 
                 if args.fuzz_paths or args.fuzz_params or args.xss_params:
                     status(f"\n[+] Starting threaded fuzzing on discovered endpoints... \n")
-                    sessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path)
+                    sessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path,
+                                             desiredTasks=len(phaseEndpoints),
+                                             threadsPerSess=cfg["concurrency"]["threads_per_session"],
+                                             maxSess=cfg["concurrency"].get("max_sessions_cap", None),
+                                             poolHeadroom=0.25
+                                             )
+                    log.debug("Session pool size=%d (phase=endpoints)", len(sessPool))
                     try:
-                        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
+                        with ThreadPoolExecutor(max_workers=min(len(phaseEndpoints), cfg["concurrency"]["max_workers"])) as executor:
                             # Run fuzzer using threads across all endpoints assigning a session from the session pool
                             futures = []
                             for i, epo in enumerate(phaseEndpoints):
@@ -448,9 +440,15 @@ def run(args):
 
                 if args.xss_forms or args.xss_stored or args.fuzz_sqli or args.fuzz_sqli_b:
                     status(f"\n[+] Starting threaded fuzzing on discovered Forms... \n")
-                    sessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path)
+                    sessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path,
+                                             desiredTasks=len(forms),
+                                             threadsPerSess=cfg["concurrency"]["threads_per_session"],
+                                             maxSess=cfg["concurrency"].get("max_sessions_cap", None),
+                                             poolHeadroom=0.25
+                                             )
+                    log.debug("Session pool size=%d (phase=endpoints)", len(sessPool))
                     try:
-                        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
+                        with ThreadPoolExecutor(max_workers=min(len(forms), cfg["concurrency"]["max_workers"])) as executor:
                             # Run fuzzer using threads across all forms assigning a session from the session pool
                             futures = []
                             for i, form in enumerate(forms):
@@ -476,31 +474,39 @@ def run(args):
 
                 if args.xss_dom:
                     status(f"\n[+] Running Dom XSS on discovered forms/endpoints...\n")
-                    domSessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path)
+                    domSessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path,
+                                                desiredTasks=1,
+                                                threadsPerSess=1,
+                                                maxSess=1,
+                                                poolHeadroom=0
+                                                )
                     domSess = domSessPool[0] if domSessPool else None
-                    bail = threading.Event() if args.bail_on_hit else None
-                    xss_dom_fuzzer = XSSFuzzer(
-                        baseUrl=args.start_url,
-                        useCrawler=False,
-                        wordlistPath=wordlistXss,
-                        outputToFile=args.output_to_file,
-                        headless=not args.no_headless,
-                        session=domSess,
-                        auth=args.auth,
-                        loginUsername=args.username,
-                        loginPassword=args.password,
-                        loginPath=args.login_path,
-                        token=runToken,
-                        bailEvent=bail
-                    )
+                    try:
+                        bail = threading.Event() if args.bail_on_hit else None
+                        xss_dom_fuzzer = XSSFuzzer(
+                            baseUrl=args.start_url,
+                            useCrawler=False,
+                            wordlistPath=wordlistXss,
+                            outputToFile=args.output_to_file,
+                            headless=not args.no_headless,
+                            session=domSess,
+                            auth=args.auth,
+                            loginUsername=args.username,
+                            loginPassword=args.password,
+                            loginPath=args.login_path,
+                            token=runToken,
+                            bailEvent=bail
+                        )
 
-                    res = xss_dom_fuzzer.domXSS(forms=rawDomForms, endpoints=endpoints)
-
-                    if res:
-                        for vul in res:
-                            vul["type"] = "xss_dom"
+                        res = xss_dom_fuzzer.domXSS(forms=rawDomForms, endpoints=endpoints)
 
                         allVulnerabilities.extend(res)
+                    finally:
+                        for sess in domSessPool:
+                            try:
+                                sess.close()
+                            except Exception:
+                                log.debug("Session close failed (dom)", exc_info=True)
 
             # Sequential run for --all
             if getattr(args, "all", False):
@@ -551,6 +557,8 @@ def run(args):
 
             allVulnerabilities = collapseDuplicates(allVulnerabilities)
             fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
+            if args.output_to_json:
+                fuzzerJson(allVulnerabilities, output_to_json=True)
 
 
         else:
@@ -572,7 +580,9 @@ def run(args):
 
                 results = fuzzer.paramXSS()
                 allVulnerabilities = collapseDuplicates(results)
-                fuzzerPrint(results, output_to_file=args.output_to_file)
+                fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
+                if args.output_to_json:
+                    fuzzerJson(allVulnerabilities, output_to_json=True)
 
             else:
 
@@ -588,7 +598,7 @@ def run(args):
                 )
 
                 if args.fuzz_paths:
-                    for p in getParents(args.start_url):
+                    for p in getParents(urlparse(args.start_url).path):
                         fuzzer.fuzzPath(p)
 
                 results = []
@@ -604,4 +614,6 @@ def run(args):
                     results.extend(fuzzer.interesting)
 
                 allVulnerabilities = collapseDuplicates(results)
-                fuzzerPrint(results, output_to_file=args.output_to_file)
+                fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
+                if args.output_to_json:
+                    fuzzerJson(allVulnerabilities, output_to_json=True)

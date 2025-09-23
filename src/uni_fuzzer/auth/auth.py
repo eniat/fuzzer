@@ -155,19 +155,32 @@ def login(session, baseUrl, username, password, loginPath=None, selectors=None, 
         log.warning("HTTP login failed", exc_info=True)
         return False
 
-def buildSessions(auth, username, password, start_url, login_path):
+def buildSessions(auth, username, password, start_url, login_path, desiredTasks=None, threadsPerSess= None, maxSess=None, poolHeadroom=0.25):
     """
         To resolve HTTP login failures from threads spamming auth set up a pool of logged in sessions shared by threads
     """
     MAX_WORKERS = int(cfg["concurrency"]["max_workers"])
-    THREADS_PER_SESSION = max(1, int(cfg["concurrency"]["threads_per_session"]))
-    pool = max(1, (MAX_WORKERS + THREADS_PER_SESSION - 1) // THREADS_PER_SESSION)
+    TPS = int(threadsPerSess or cfg["concurrency"]["threads_per_session"])
+    TPS = max(1, TPS)
 
-    sessPool = []
+    # Amount of tasks
+    tasks = int(desiredTasks) if desiredTasks is not None else MAX_WORKERS
+
+    # Amoount of sessiosn needed and the cap
+    pool = max(1, (tasks + TPS - 1) // TPS)
+    cap = int(maxSess or cfg["concurrency"].get("max_sessions_cap", pool))
+    pool = min(pool, max(1, cap))
+
+    sessPool =[]
     for i in range(pool):
 
         sess = requests.Session()
-        adapter = HTTPAdapter(pool_connections=THREADS_PER_SESSION, pool_maxsize=THREADS_PER_SESSION, max_retries=0)
+
+        # Create slight headroom for redirects ect
+        headroom = max(2, int(TPS * poolHeadroom))
+        pool_size = TPS + headroom
+
+        adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size, max_retries=0, pool_block=True)
         sess.mount("http://", adapter)
         sess.mount("https://", adapter)
         sess.trust_env = False

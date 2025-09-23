@@ -1,4 +1,28 @@
+import json
 from pathlib import Path
+from dataclasses import dataclass, asdict, field
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, List
+
+# Creating a dataclass for all vulnerabilities output
+@dataclass
+class Finding:
+    type: str
+    url: str
+    method: str
+    param: Optional[str] = None
+    payload: Optional[str] = None
+    indicator: str = ""
+    status_code: Optional[int] = None
+    count: Optional[int] = None
+    payload_samples: List[str] = field(default_factory=list)
+    response_snippet: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        dic = asdict(self)
+        if dic.get("response_snippet"):
+            dic["response_snippet"] = str(dic["response_snippet"])[:200]
+        return dic
 
 def crawlerPrint(endpoints, forms, output_to_file=False, filename="crawler-output.txt"):
     """
@@ -47,7 +71,7 @@ def crawlerPrint(endpoints, forms, output_to_file=False, filename="crawler-outpu
 
 
 
-def fuzzerPrint(vulnerabilities, output_to_file= False, filename="fuzzer-output.txt"):
+def fuzzerPrint(vulnerabilities: List[Finding], output_to_file= False, filename="fuzzer-output.txt"):
     """
         Prints fuzzer results to console and file
     """
@@ -55,21 +79,18 @@ def fuzzerPrint(vulnerabilities, output_to_file= False, filename="fuzzer-output.
         print("\n[+] Vulnerabilities discovered:")
 
         for vuln in vulnerabilities:
-            if vuln["type"] == "interesting_200":
-                print(f"  - [INTERESTING 200] {vuln['url']}")
+            if vuln.type == "interesting_200":
+                print(f"  - [INTERESTING 200] {vuln.url}")
             else:
-                print(f"  - [{vuln['type'].upper()}] {vuln['url']}")
-            print(f"    Payload:       {vuln['payload']}")
-            print(f"    Status Code:   {vuln.get('status_code', 'N/A')}")
-            print(f"    Indicator Hit: {vuln.get('indicator', 'N/A')}")
+                print(f"  - [{vuln.type.upper()}] {vuln.url}")
+            print(f"    Payload:       {vuln.payload}")
+            print(f"    Status Code:   {vuln.status_code if vuln.status_code is not None else 'N/A'}")
+            print(f"    Indicator Hit: {vuln.indicator or 'N/A'}")
 
-            cnt = vuln.get("count")
-            if isinstance(cnt, int) and cnt > 1:
-                print(f"    Count:         {cnt}")
+            if isinstance(vuln.count, int) and vuln.count > 1:
+                print(f"    Count:         {vuln.count}")
 
-            samples = (vuln.get("payload_samples") or [])
-
-            samples = [s for s in samples if s != vuln.get('payload')]
+            samples = [s for s in (vuln.payload_samples or []) if s != vuln.payload]
             if samples:
                 print(f"    Payload Samples: {samples[:5]}")
             print()
@@ -81,29 +102,79 @@ def fuzzerPrint(vulnerabilities, output_to_file= False, filename="fuzzer-output.
 
             with open(p, "w", encoding="utf-8", errors="replace") as f:
                 for vuln in vulnerabilities:
-                    if vuln.get("type") == "interesting_200":
-                        f.write(f"  - [INTERESTING 200] {vuln.get('url')}\n")
+                    if vuln.type == "interesting_200":
+                        f.write(f"  - [INTERESTING 200] {vuln.url}\n")
                     else:
-                        f.write(f"  - [{str(vuln.get('type', '')).upper()}] {vuln.get('url')}\n")
+                        f.write(f"  - [{vuln.type.upper()}] {vuln.url}\n")
 
-                    f.write(f"  Payload:       {vuln.get('payload')}\n")
-                    f.write(f"  Status Code:   {vuln.get('status_code', 'N/A')}\n")
-                    f.write(f"  Indicator Hit: {vuln.get('indicator', 'N/A')}\n")
+                    f.write(f"  Payload:       {vuln.payload}\n")
+                    f.write(f"  Status Code:   {vuln.status_code if vuln.status_code is not None else 'N/A'}\n")
+                    f.write(f"  Indicator Hit: {vuln.indicator or 'N/A'}\n")
 
-                    cnt = vuln.get("count")
-                    if isinstance(cnt, int) and cnt > 1:
-                        f.write(f"  Count:         {cnt}\n")
+                    if isinstance(vuln.count, int) and vuln.count > 1:
+                        f.write(f"  Count:         {vuln.count}\n")
 
-                    samples = vuln.get("payload_samples") or []
-                    extra_samples = [s for s in samples if s != vuln.get("payload")]
-                    if extra_samples:
-                        f.write(f"  Payload Samples: {extra_samples}\n")
+                    samples = [s for s in (vuln.payload_samples or []) if s != vuln.payload]
+                    if samples:
+                        f.write(f"  Payload Samples: {samples}\n")
 
-                    # Keep snippet only in file output
-                    snippet = (vuln.get('response_snippet', '') or '').replace(chr(10), ' ')[:200]
+                    snippet = (vuln.response_snippet or "").replace(chr(10), " ")[:200]
                     if snippet:
                         f.write(f"  Snippet:       {snippet}\n")
 
                     f.write("-" * 50 + "\n")
     else:
         print("[-] No vulnerabilities found.")
+
+def crawlerJson(endpoints, forms, output_to_json=False, filename="crawler-output.json"):
+    """
+        Prints crawler results to json file
+    """
+    data = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "summary": {
+            "endpoints_count": len(endpoints or []),
+            "forms_count": len(forms or [])
+        },
+        "endpoints": [
+            {
+                "method": ep.get("method"),
+                "url": ep.get("url"),
+                "params": ep.get("params"),
+            } for ep in (endpoints or [])
+        ],
+        "forms": [
+            {
+                "method": fm.get("method"),
+                "url": fm.get("url"),
+                "fields": fm.get("formFields"),
+            } for fm in (forms or [])
+        ],
+    }
+
+    if output_to_json:
+        path = Path(filename)
+        if path.parent and not path.parent.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+
+def fuzzerJson(vulnerabilities: List[Finding], output_to_json= False, filename="fuzzer-output.json"):
+    """
+        Prints fuzzer results to json file
+    """
+    findings = [vuln.to_dict() for vuln in (vulnerabilities or [])]
+    data = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "summary": {"findings_count": len(findings)},
+        "findings": findings
+    }
+
+    if output_to_json:
+        path = Path(filename)
+        if path.parent and not path.parent.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)

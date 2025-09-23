@@ -11,6 +11,7 @@ from requests.cookies import RequestsCookieJar
 from requests.adapters import HTTPAdapter
 from threading import Lock
 
+from uni_fuzzer.core.reporting import Finding
 from uni_fuzzer.core.probes import probeDom, probeReflexivity
 from uni_fuzzer.auth.auth import seleniumLogin, login
 from uni_fuzzer.core.baseline import baselineForm
@@ -107,13 +108,15 @@ class XSSFuzzer:
             # deeper XSS detection
             ok, indicator = detectXSS(body, self.token, markedPayload)
             if ok:
-                result = {
-                    "url": url,
-                    "payload": payload,
-                    "status_code": response.status_code,
-                    "indicator": indicator or "N/A",
-                    "snippet": body[:200],
-                }
+                result = Finding(
+                    type="xss_reflected",
+                    url=url,
+                    method=method,
+                    payload=payload,
+                    indicator=indicator or "N/A",
+                    status_code=response.status_code,
+                    response_snippet=body[:200]
+                )
                 self.vulnerableParams.append(result)
                 if self.bailEvent:
                     try:
@@ -213,35 +216,36 @@ class XSSFuzzer:
                     continue
 
                 data = out["data"]
-                finUrl = data.get("url") or ""
-                indicator = data.get("indicator") or "N/A"
-                raw = data.get("payload")
+                finUrl = data.url or ""
+                indicator = data.indicator or "N/A"
+                raw = data.payload
 
                 pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                resultsKey = (pageKey, indicator)
+                resultsKey = (pageKey, indicator, "xss_param")
 
                 if resultsKey not in results:
-
-                    results[resultsKey] = {
-                        "url": pageKey,
-                        "payload": raw,
-                        "payload_samples": [raw],
-                        "status_code": data.get("status_code"),
-                        "indicator": indicator or "N/A",
-                        "snippet": (data.get("snippet") or "")[:200],
-                        "count": 1,
-                        "type": "xss_param"
-                    }
+                    results[resultsKey] = Finding(
+                        type="xss_param",
+                        url=pageKey,
+                        method="GET",
+                        param=None,
+                        payload=raw,
+                        indicator=indicator,
+                        status_code=data.status_code,
+                        count=1,
+                        payload_samples=[raw] if raw is not None else [],
+                        response_snippet=data.response_snippet,
+                    )
                     # If bail on first then bail
                     if self.bailEvent:
                         self.bailEvent.set()
                         return [results[resultsKey]]
                 else:
-                    entry = results[resultsKey]
-                    entry["count"] += 1
-                    # Cap the examples
-                    if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                        entry["payload_samples"].append(raw)
+                    find = results[resultsKey]
+                    find.count = (find.count or 0) + 1
+                    if raw is not None and len(
+                            find.payload_samples) < MAX_SAMPLES_PER_GROUP and raw not in find.payload_samples:
+                        find.payload_samples.append(raw)
                 # If bail on first then bail
                 if self.bailEvent and self.bailEvent.is_set():
                     break
@@ -350,34 +354,37 @@ class XSSFuzzer:
                         continue
 
                     data = res["data"]
-                    finUrl = data.get("url") or url
+                    finUrl = data.url or url
                     pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-                    indicator = data.get("indicator") or "N/A"
+                    indicator = data.indicator or "N/A"
+                    raw = data.payload
 
-                    resultsKey = (pageKey, indicator)
+                    resultsKey = (pageKey, indicator, "xss_form")
 
                     if resultsKey not in results:
 
-                        results[resultsKey] = {
-                            "url": pageKey,
-                            "payload": raw,
-                            "payload_samples": [raw],
-                            "status_code": data.get("status_code"),
-                            "indicator": indicator,
-                            "snippet": (data.get("snippet") or "")[:200],
-                            "count": 1,
-                            "type": "xss_form"
-                        }
+                        results[resultsKey] = Finding(
+                            type="xss_form",
+                            url=pageKey,
+                            method=method,
+                            param=None,
+                            payload=raw,
+                            indicator=indicator,
+                            status_code=data.status_code,
+                            count=1,
+                            payload_samples=[raw] if raw is not None else [],
+                            response_snippet=data.response_snippet
+                        )
                         # If bail on first then bail
                         if self.bailEvent:
                             self.bailEvent.set()
                             return [results[resultsKey]]
                     else:
-                        entry = results[resultsKey]
-                        entry["count"] += 1
-                        # Cap the examples
-                        if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                            entry["payload_samples"].append(raw)
+                        find = results[resultsKey]
+                        find.count = (find.count or 0) + 1
+                        if raw is not None and len(
+                                find.payload_samples) < MAX_SAMPLES_PER_GROUP and raw not in find.payload_samples:
+                            find.payload_samples.append(raw)
                     # If bail on first then bail
                     if self.bailEvent and self.bailEvent.is_set():
                         break
@@ -595,25 +602,28 @@ class XSSFuzzer:
 
                         resultsKey = (pageKey, (indicator or "N/A"), "xss_stored")
                         if resultsKey not in results:
-                            results[resultsKey] = {
-                                "url": pageKey,
-                                "payload": raw,
-                                "payload_samples": [raw],
-                                "status_code": res.status_code,
-                                "indicator": indicator,
-                                "snippet": (res.text or "")[:200],
-                                "count": 1,
-                                "type": "xss_stored",
-                            }
+                            results[resultsKey] = Finding(
+                                type="xss_stored",
+                                url=pageKey,
+                                method="GET",
+                                param=None,
+                                payload=raw,
+                                indicator=indicator or "N/A",
+                                status_code=res.status_code,
+                                count=1,
+                                payload_samples=[raw],
+                                response_snippet=(res.text or "")[:200]
+                            )
                             # If bail on first then bail
                             if self.bailEvent:
                                 self.bailEvent.set()
                                 return [results[resultsKey]]
                         else:
-                            entry = results[resultsKey]
-                            entry["count"] += 1
-                            if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                entry["payload_samples"].append(raw)
+                            find = results[resultsKey]
+                            find.count = (find.count or 0) + 1
+                            if raw is not None and len(
+                                    find.payload_samples) < MAX_SAMPLES_PER_GROUP and raw not in find.payload_samples:
+                                find.payload_samples.append(raw)
 
         return list(results.values())
 
@@ -833,24 +843,26 @@ class XSSFuzzer:
 
                     if resultsKey not in results:
 
-                        results[resultsKey] = {
-                            "url": pageKey,
-                            "payload": raw,
-                            "payload_samples": [raw],
-                            "status_code": 200,
-                            "indicator": indicator ,
-                            "snippet": (driver.page_source or "")[:200],
-                            "count": 1,
-                            "type": "xss_dom"
-                        }
+                        results[resultsKey] = Finding(
+                            type="xss_dom",
+                            url=pageKey,
+                            method="GET",
+                            param=None,
+                            payload=raw,
+                            indicator=indicator or "N/A",
+                            status_code=200,
+                            count=1,
+                            payload_samples=[raw],
+                            response_snippet=(driver.page_source or "")[:200]
+                        )
                         if pageRep is not None:
                             pageRep.add(pageKey)
                     else:
-                        entry = results[resultsKey]
-                        entry["count"] += 1
-                        # Cap the examples
-                        if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                            entry["payload_samples"].append(raw)
+                        find = results[resultsKey]
+                        find.count = (find.count or 0) + 1
+                        if raw is not None and len(
+                                find.payload_samples) < MAX_SAMPLES_PER_GROUP and raw not in find.payload_samples:
+                            find.payload_samples.append(raw)
 
                 except Exception:
                     log.debug("DOM candidate failed for %s", finUrl, exc_info=True)

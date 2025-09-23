@@ -5,6 +5,7 @@ from urllib.parse import urlparse, quote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 
+from uni_fuzzer.core.reporting import Finding
 from uni_fuzzer.core.probes import probeReactivity
 from uni_fuzzer.auth.auth import login
 from uni_fuzzer.fuzzers.detection import detectSQLiBlind, detectSQLiDiff, detectSQLError
@@ -110,7 +111,7 @@ class SQLiFuzzer:
                             data = autoSubmits(baseText, data)
                             fut = executor.submit(self.session.post, url, data=data, headers=self.headers, timeout=cfg["http"]["timeout_post_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_post"])
                             tasks.append(fut)
-                            ctx[fut] = (url, payload)
+                            ctx[fut] = (url, payload, target, "POST")
 
                         else:
                             # GET form fuzzing
@@ -125,7 +126,7 @@ class SQLiFuzzer:
                             fut = executor.submit(self.session.get, url, params =params, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"],allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
 
                             tasks.append(fut)
-                            ctx[fut] = (fullUrl, payload)
+                            ctx[fut] = (fullUrl, payload, target, "GET")
 
                 # collect responses as they finish
                 for fut in as_completed(tasks):
@@ -136,70 +137,74 @@ class SQLiFuzzer:
                         res = fut.result()
 
                     except Exception:
-                        finUrl, payload = ctx.get(fut, ("<unknown>", "<unknown>"))
-                        log.debug("SQLi future failed for %s payload=%s", finUrl, payload, exc_info=True)
+                        finUrl, payload, target, method  = ctx.get(fut, ("<unknown>", "<unknown>", "<unknown>", "<unknown>"))
+                        log.debug("SQLi future failed for %s payload=%s target=%s method=%s", finUrl, payload, target, method, exc_info=True)
                         continue
 
-                    finUrl, payload = ctx[fut]
+                    finUrl, payload, target, method = ctx[fut]
 
 
                     body = res.text or ""
-                    status = res.status_code
+                    statusC = res.status_code
 
                     # Check for SQL Error
                     isErr, indicator = detectSQLError(body)
 
-                    if isErr or (status != baseStatus and status >= 400):
+                    if isErr or (statusC != baseStatus and statusC >= 400):
                         pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
                         resultsKey = (pageKey, "sql_error", "sqli_potential")
 
                         with self.lock:
                             if resultsKey not in self.vulnerableForms:
-                                self.vulnerableForms[resultsKey] = {
-                                    "url": pageKey,
-                                    "payload": payload,
-                                    "payload_samples": [payload],
-                                    "status_code": status,
-                                    "indicator": "sql_error",
-                                    "snippet": (body or "")[:200],
-                                    "count": 1,
-                                    "type": "sqli_potential",
-                                    "severity": "potential",
-                                }
+                                self.vulnerableForms[resultsKey] = Finding(
+                                    type="sqli_potential",
+                                    url=pageKey,
+                                    method=method,
+                                    param=target,
+                                    payload=payload,
+                                    indicator=indicator or "sql_error",
+                                    status_code=statusC,
+                                    count=1,
+                                    payload_samples=[payload] if payload is not None else [],
+                                    response_snippet=(body or "")[:200]
+                                )
 
                             else:
-                                entry = self.vulnerableForms[resultsKey]
-                                entry["count"] += 1
-                                if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                    entry["payload_samples"].append(payload)
+                                find = self.vulnerableForms[resultsKey]
+                                find.count = (find.count or 0) + 1
+                                if payload is not None and len(
+                                        find.payload_samples) < MAX_SAMPLES_PER_GROUP and payload not in find.payload_samples:
+                                    find.payload_samples.append(payload)
                         continue
 
                     # Check for valid SQLi ran code
                     if baseStatus:
-                        if status != baseStatus or detectSQLiDiff(baseText, body, payload=payload):
+                        if statusC != baseStatus or detectSQLiDiff(baseText, body, payload=payload):
 
                             pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
                             resultsKey = (pageKey, "detected_sql_content", "sqli_inj")
 
                             with self.lock:
                                 if resultsKey not in self.vulnerableForms:
-                                    self.vulnerableForms[resultsKey] = {
-                                        "url": pageKey,
-                                        "payload": payload,
-                                        "payload_samples": [payload],
-                                        "status_code": status,
-                                        "indicator": "detected_sql_content",
-                                        "snippet": (body or "")[:200],
-                                        "count": 1,
-                                        "type": "sqli_inj",
-                                        "severity": "vulnerable",
-                                    }
+                                    self.vulnerableForms[resultsKey] = Finding(
+                                        type="sqli_inj",
+                                        url=pageKey,
+                                        method=method,
+                                        param=target,
+                                        payload=payload,
+                                        indicator="detected_sql_content",
+                                        status_code=statusC,
+                                        count=1,
+                                        payload_samples=[payload] if payload is not None else [],
+                                        response_snippet=(body or "")[:200]
+                                    )
 
                                 else:
-                                    entry = self.vulnerableForms[resultsKey]
-                                    entry["count"] += 1
-                                    if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                        entry["payload_samples"].append(payload)
+                                    find = self.vulnerableForms[resultsKey]
+                                    find.count = (find.count or 0) + 1
+                                    if payload is not None and len(
+                                            find.payload_samples) < MAX_SAMPLES_PER_GROUP and payload not in find.payload_samples:
+                                        find.payload_samples.append(payload)
                                 if self.bailEvent:
                                     try:
                                         self.bailEvent.set()
@@ -319,7 +324,7 @@ class SQLiFuzzer:
                         continue
 
                     body = res.text or ""
-                    status = res.status_code
+                    statusC = res.status_code
 
                     # Store bools then check when we have both
                     if kind in ("bool_true", "bool_false"):
@@ -330,7 +335,7 @@ class SQLiFuzzer:
 
                         precheckBools[key][kind] = {
                             "body": body,
-                            "status": status,
+                            "status": statusC,
                             "url": finUrl,
                             "cond": condStr
                         }
@@ -352,23 +357,24 @@ class SQLiFuzzer:
 
                             with self.lock:
                                 if resultsKey not in self.vulnerableForms:
-                                    self.vulnerableForms[resultsKey] = {
-                                        "url": pageKey,
-                                        "payload": payloadUsed,
-                                        "payload_samples": [payloadUsed],
-                                        "status_code": true["status"],
-                                        "indicator": "blind_sql_boolean",
-                                        "snippet": (true["body"] or "")[:200],
-                                        "count": 1,
-                                        "type": "sqli_blind",
-                                        "severity": "vulnerable",
-                                    }
+                                    self.vulnerableForms[resultsKey] = Finding(
+                                        type="sqli_blind",
+                                        url=pageKey,
+                                        method=method,
+                                        param=None,
+                                        payload=payloadUsed,
+                                        indicator="blind_sql_boolean",
+                                        status_code=true["status"],
+                                        count=1,
+                                        payload_samples=[payloadUsed],
+                                        response_snippet=(true["body"] or "")[:200],
+                                    )
 
                                 else:
-                                    entry = self.vulnerableForms[resultsKey]
-                                    entry["count"] += 1
-                                    if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                        entry["payload_samples"].append(payloadUsed)
+                                    find = self.vulnerableForms[resultsKey]
+                                    find.count = (find.count or 0) + 1
+                                    if len(find.payload_samples) < MAX_SAMPLES_PER_GROUP and payloadUsed not in find.payload_samples:
+                                        find.payload_samples.append(payloadUsed)
                                 if self.bailEvent:
                                     try:
                                         self.bailEvent.set()
@@ -502,23 +508,24 @@ class SQLiFuzzer:
 
                                 with self.lock:
                                     if resultsKey not in self.vulnerableForms:
-                                        self.vulnerableForms[resultsKey] = {
-                                            "url": pageKey,
-                                            "payload": payload,
-                                            "payload_samples": [payload],
-                                            "status_code": res.status_code,
-                                            "indicator": "blind_sql_timing",
-                                            "snippet": (res.text or "")[:200],
-                                            "count": 1,
-                                            "type": "sqli_blind",
-                                            "severity": "vulnerable",
-                                        }
+                                        self.vulnerableForms[resultsKey] = Finding(
+                                            type="sqli_blind",
+                                            url=pageKey,
+                                            method=method,
+                                            param=None,
+                                            payload=payload,
+                                            indicator="blind_sql_timing",
+                                            status_code=res.status_code,
+                                            count=1,
+                                            payload_samples=[payload],
+                                            response_snippet=(res.text or "")[:200]
+                                        )
 
                                     else:
-                                        entry = self.vulnerableForms[resultsKey]
-                                        entry["count"] += 1
-                                        if len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                                            entry["payload_samples"].append(payload)
+                                        find = self.vulnerableForms[resultsKey]
+                                        find.count = (find.count or 0) + 1
+                                        if len(find.payload_samples) < MAX_SAMPLES_PER_GROUP and payload not in find.payload_samples:
+                                            find.payload_samples.append(payload)
                                     if self.bailEvent:
                                         try:
                                             self.bailEvent.set()

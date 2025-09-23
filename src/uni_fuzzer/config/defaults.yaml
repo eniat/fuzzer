@@ -1,10 +1,10 @@
 http:
   user_agent: "uni-fuzzer/0.1 (+https://example.local)"
   add_referer: true
-  timeout_get_seconds: 2
-  timeout_post_seconds: 2
-  crawl_get: 3
-  crawl_post: 3
+  timeout_get_seconds: 5
+  timeout_post_seconds: 5
+  crawl_get: 5
+  crawl_post: 5
   redirects:
     baseline_get: true
     baseline_post: true
@@ -14,14 +14,15 @@ http:
     submit: true
 
 concurrency:
-  max_workers: 20
-  path_workers_recursive: 10
-  threads_per_session: 5
+  max_workers: 10
+  path_workers_recursive: 5
+  threads_per_session: 2
+  max_sessions_cap: 12
 
 crawler:
   mode_default: "both"
   max_pages_default: 20
-  rate_limit_default: 0.0
+  rate_limit_default: 0.2
   headless_default: true
   output_to_file_default: false
   option_capacity: 80
@@ -108,7 +109,7 @@ xss:
     - "</script><script>window.__XSS_CANARY__=\"{CANARY}\"</script>"
     - "{CANARY}"
   dom_delay_seconds: 0.25
-  stored_settle_seconds: 1
+  stored_settle_seconds: 3
   regex:
     script: "<script[^>]*>(?:(?!</script>).)*({token})(?:(?!</script>).)*</script>"
     attr: "\\bon\\w+\\s*=\\s*(['\\\"]).*?({token}).*?\\1"

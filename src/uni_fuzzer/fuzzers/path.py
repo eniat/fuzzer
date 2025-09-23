@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 
 from requests.adapters import HTTPAdapter
 
+from uni_fuzzer.core.reporting import Finding
 from uni_fuzzer.fuzzers.detection import detectPathTraversal
 from uni_fuzzer.core.baseline import getBaseline
 from uni_fuzzer.auth.auth import login
@@ -123,7 +124,9 @@ class PathFuzzer:
                     log.debug("Path fuzz future failed", exc_info=True)
                     continue
                 if result and result["type"] == "interesting_200":
-                    interestingResults.append((result["data"]["url"], result["data"]["depth"]))
+                    url = result["data"]["url"]
+                    parsed = urlparse(url)
+                    interestingResults.append((parsed.path or "/", result["data"]["depth"]))
         # If bail on first then bail
         if self.bailEvent and self.bailEvent.is_set():
             return
@@ -157,7 +160,7 @@ class PathFuzzer:
             response = self.session.get(url, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
 
             resultType, indicator = detectPathTraversal(response,self.baseline)
-            status = response.status_code
+            statusC = response.status_code
 
             # Skip if too similar
             if resultType == "skip_similar":
@@ -165,18 +168,18 @@ class PathFuzzer:
 
             # If an interesting_200 then add to results
             if resultType == "interesting_200" and not isParamFuzzing:
-                result = {
-                    "url": url,
-                    "depth": depth + 1,
-                    "status_code": status,
-                    "payload": payload,
-                    "response_snippet": (response.text or "")[:200],
-                    "type": "interesting_200"
-                }
+                result = Finding(
+                    type="interesting_200",
+                    url=url,
+                    method="GET",
+                    payload=payload,
+                    status_code=statusC,
+                    response_snippet=(response.text or "")[:200]
+                )
                 with self.lock:
                     self.interesting200.append(result)
 
-                return {"type": "interesting_200", "data": result}
+                return {"type": "interesting_200", "data": {"url": url, "depth": depth + 1}}
 
             if resultType == "vulnerable":
                 with self.lock:
@@ -187,16 +190,17 @@ class PathFuzzer:
 
                     # First timer
                     if resultsKey not in self.vulnerablePaths:
-                        self.vulnerablePaths[resultsKey] = {
-                            "url": url,
-                            "payload": payload,
-                            "payload_samples": [payload] if payload else [],
-                            "status_code": response.status_code,
-                            "indicator": indicator or "N/A",
-                            "snippet": (response.text or "")[:200],
-                            "count": 1,
-                            "type": kind,
-                        }
+                        self.vulnerablePaths[resultsKey] = Finding(
+                            type=kind,
+                            url=url,
+                            method="GET",
+                            payload=payload,
+                            indicator=(indicator or "N/A"),
+                            status_code=statusC,
+                            count=1,
+                            payload_samples=[payload] if payload else [],
+                            response_snippet=(response.text or "")[:200]
+                        )
 
                         if self.bailEvent:
                             try:
@@ -205,24 +209,27 @@ class PathFuzzer:
                                 log.debug("Failed to set bailEvent in PathFuzzer", exc_info=True)
 
                     else:
-                        entry = self.vulnerablePaths[resultsKey]
-                        entry["count"] += 1
+                        res = self.vulnerablePaths[resultsKey]
+                        res.count = (res.count or 0) + 1
 
-                        if payload and len(entry["payload_samples"]) < MAX_SAMPLES_PER_GROUP:
-                            entry["payload_samples"].append(payload)
+                        if payload and (len(res.payload_samples) < MAX_SAMPLES_PER_GROUP) and (
+                                payload not in res.payload_samples):
+                            res.payload_samples.append(payload)
 
-                    return {"type": "vulnerable", "data": self.vulnerablePaths[resultsKey]}
+                return {"type": "vulnerable", "data": self.vulnerablePaths[resultsKey]}
 
             elif resultType == "interesting" and not isParamFuzzing:
 
+                finding = Finding(
+                    type="interesting",
+                    url=url,
+                    method="GET",
+                    payload=payload,
+                    status_code=statusC
+                )
+
                 with self.lock:
-                    self.interesting.append({
-                        "url": url,
-                        "depth": depth + 1,
-                        "status_code": status,
-                        "payload": payload,
-                        "type": "interesting"
-                    })
+                    self.interesting.append(finding)
 
                 #Prevent recursion on files
                 parsed = urlparse(url).path.lower()
@@ -235,7 +242,7 @@ class PathFuzzer:
                     "data": {
                         "url": url,
                         "depth": depth + 1,
-                        "status_code": status,
+                        "status_code": statusC,
                         "payload": payload
                     }
                 }

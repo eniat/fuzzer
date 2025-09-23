@@ -8,6 +8,8 @@ from urllib.parse import urlparse, unquote
 import yaml
 import posixpath
 
+from uni_fuzzer.core.reporting import Finding
+
 log = logging.getLogger(__name__)
 
 @lru_cache(maxsize=1)
@@ -49,14 +51,13 @@ def loadWordlist(path):
         # On error raise exception
         raise RuntimeError(f"[-] Failed to load wordlist from {path}: {e}")
 
-def collapseDuplicates(items):
+def collapseDuplicates (items: list[Finding]) -> list[Finding]:
     """
         Collapses duplicates that go into the same normalised path
     """
     groups = {}
     storedGroups = {}
-    passthrough = []
-    emitted = []
+    emitted: list[Finding] = []
 
     cfg = get_cfg()
 
@@ -68,8 +69,8 @@ def collapseDuplicates(items):
     PATH_MAX_SAMPLES = cfg["path_traversal"]["max_samples_per_group"]
 
     for item in items or []:
-        rawUrl = (item.get("url") or "").strip()
-        typ = (item.get("type") or "").lower()
+        rawUrl = (item.url or "").strip()
+        typ = (item.type or "").lower()
 
         if not rawUrl:
             continue
@@ -86,52 +87,51 @@ def collapseDuplicates(items):
                 path = path.rstrip("/")
 
             pageUrl = f"{scheme}://{host}{path}"
-            indicator = (item.get("indicator") or "N/A")
+            indicator = (item.indicator or "N/A")
 
             skey = (typ, host, path, indicator)
 
-            try:
-                count = int(item.get("count") or 0)
-            except Exception:
-                log.debug("Failed to parse count (defaulting to 0)", exc_info=True)
-                count = 0
+            count = int(item.count or 0)
+            samples = list(item.payload_samples or [])
 
-            samples = list(item.get("payload_samples") or [])
+            if not samples and item.payload is not None:
+                samples = [item.payload]
 
-            if not samples and item.get("payload") is not None:
-                samples = [item["payload"]]
             if skey not in storedGroups:
-                rep = {
-                    "url": pageUrl,
-                    "payload": item.get("payload"),
-                    "payload_samples": [],
-                    "status_code": item.get("status_code"),
-                    "indicator": indicator,
-                    "snippet": (item.get("snippet") or "")[:200],
-                    "count": 0,
-                    "type": typ,
-                }
-                rep["count"] += (count or 1)
+                rep = Finding(
+                    type=typ,
+                    url=pageUrl,
+                    method=item.method or "GET",
+                    param=item.param,
+                    payload=item.payload,
+                    indicator=indicator,
+                    status_code=item.status_code,
+                    count=0,
+                    payload_samples=[],
+                    response_snippet=(item.response_snippet or "")[:200]
+                )
+                rep.count = (rep.count or 0) + (count or 1)
                 for sample in samples:
-                    if sample is not None and len(rep["payload_samples"]) < XSS_MAX_SAMPLES:
-                        if sample not in rep["payload_samples"]:
-                            rep["payload_samples"].append(sample)
+                    if sample is not None and len(rep.payload_samples) < XSS_MAX_SAMPLES:
+                        if sample not in rep.payload_samples:
+                            rep.payload_samples.append(sample)
 
                 storedGroups[skey] = rep
                 emitted.append(rep)
 
             else:
-                group = storedGroups[skey]
-                group["count"] += (count or 1)
+                rep = storedGroups[skey]
+
+                rep.count = (rep.count or 0) + (count or 1)
 
                 for sample in samples:
-                    if sample is not None and len(group["payload_samples"]) < XSS_MAX_SAMPLES:
-                        if sample not in group["payload_samples"]:
-                            group["payload_samples"].append(sample)
+                    if sample is not None and len(rep.payload_samples) < XSS_MAX_SAMPLES:
+                        if sample not in rep.payload_samples:
+                            rep.payload_samples.append(sample)
 
                 try:
-                    if int(item.get("status_code") or 0) > int(group.get("status_code") or 0):
-                        group["status_code"] = item.get("status_code")
+                    if int(item.status_code or 0) > int(rep.status_code or 0):
+                        rep.status_code = item.status_code
                 except Exception:
                     log.debug("Failed to update status_code in stored XSS group", exc_info=True)
 
@@ -142,7 +142,6 @@ def collapseDuplicates(items):
 
         if not isFile:
             emitted.append(item)
-            passthrough.append(item)
             continue
 
         p = urlparse(rawUrl)
@@ -183,18 +182,24 @@ def collapseDuplicates(items):
         key = (typ, host, groupPath)
 
         if key not in groups:
-            rep = {
-                "url": f"{scheme}://{host}{groupPath}",
-                "payload": item.get("payload"),
-                "status_code": item.get("status_code"),
-                "indicator": (item.get("indicator") or "N/A"),
-                "snippet": (item.get("snippet") or "")[:200],
-                "type": typ or "path",
+            rep = Finding(
+                type=typ or "path",
+                url=f"{scheme}://{host}{groupPath}",
+                method=item.method or "GET",
+                param=item.param,
+                payload=item.payload,
+                indicator=(item.indicator or "N/A").strip(),
+                status_code=item.status_code,
+                count=0,
+                payload_samples=[],
+                response_snippet=(item.response_snippet or "")[:200]
+            )
+            groups[key] = {
+                "rep": rep,
                 "variant_path_count": 0,
                 "variant_samples": [],
                 "had_traversal": False,
             }
-            groups[key] = rep
             emitted.append(rep)
 
         group = groups[key]
@@ -205,23 +210,24 @@ def collapseDuplicates(items):
 
         group["had_traversal"] = group["had_traversal"] or hadTraversal
 
+        rep = group["rep"]
         # Prefer first
-        if not group.get("payload"):
-            group["payload"] = item.get("payload")
-        ind = (item.get("indicator") or "").strip()
+        if not rep.payload:
+            rep.payload = item.payload
 
-        if ind and group.get("indicator", "N/A") == "N/A":
-            group["indicator"] = ind
+        ind = (item.indicator or "").strip()
+        if ind and (rep.indicator or "N/A") == "N/A":
+            rep.indicator = ind
 
         try:
-            if int(item.get("status_code") or 0) > int(group.get("status_code") or 0):
-                group["status_code"] = item.get("status_code")
+            if int(item.status_code or 0) > int(rep.status_code or 0):
+                rep.status_code = item.status_code
 
         except Exception:
             log.debug("Failed to update status_code in path/param group", exc_info=True)
 
-        group["count"] = group["variant_path_count"]
-        group["payload_samples"] = group["variant_samples"]
+        rep.count = group["variant_path_count"]
+        rep.payload_samples = group["variant_samples"][:]
 
     return emitted
 
