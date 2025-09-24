@@ -18,6 +18,9 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 - [ ] **Improve CLI UX**  
   Add CLI art, loading animations, and progress bars.
 
+- [ ] **Improve controller flow**  
+  Make the controller flow better and be more of a pluggable architecture.
+
 - [ ] **Explore OpenAI prompting**  
   Integrate LLM prompting depending on cost and time.
 
@@ -97,6 +100,7 @@ What happens:
 3. Deduplicate and print findings; optional JSON/file outputs if flags provided.
 
 ### Focused runs
+>Extra wordlists can be uploaded into src/uni_fuzzer/resources/wordlists and then used with any of the wordlist CLI commands and the shortened name without the .txt
 
 **Path traversal only (with crawler)**
 
