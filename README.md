@@ -18,7 +18,7 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 - [ ] **Improve CLI UX**  
   Add CLI art, loading animations, and progress bars.
 
-- [ ] **Improve controller flow**  
+- [x] **Improve controller flow**  
   Make the controller flow better and be more of a pluggable architecture.
 
 - [ ] **Explore OpenAI prompting**  
