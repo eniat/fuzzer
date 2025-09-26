@@ -72,7 +72,6 @@ class FormsPhase (FuzzerPhase):
                     baseUrl=fullUrl,
                     useCrawler=False,
                     wordlistPath=self.wordlistXss,
-                    outputToFile=args.output_to_file,
                     headless=not args.no_headless,
                     session=sess,
                     auth=False,
@@ -93,7 +92,6 @@ class FormsPhase (FuzzerPhase):
                     baseUrl=fullUrl,
                     useCrawler=False,
                     wordlistPath=self.wordlistXss,
-                    outputToFile=args.output_to_file,
                     headless=not args.no_headless,
                     session=sess,
                     auth=False,
@@ -125,7 +123,6 @@ class FormsPhase (FuzzerPhase):
                     baseUrl=args.start_url,
                     useCrawler=False,
                     wordlistPath=self.wordlistSqli,
-                    outputToFile=args.output_to_file,
                     session=sess,
                     auth=False,
                     bailEvent=bail
@@ -144,7 +141,6 @@ class FormsPhase (FuzzerPhase):
                     baseUrl=args.start_url,
                     useCrawler=False,
                     wordlistPath=self.wordlistSqli,
-                    outputToFile=args.output_to_file,
                     session=sess,
                     auth=False,
                     bailEvent=bail

@@ -1,12 +1,9 @@
-import requests
 import threading
 import logging
-from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse, quote
 from pathlib import PurePosixPath
 
-from requests.adapters import HTTPAdapter
-
+from uni_fuzzer.core.base_fuzzer import AbstractFuzzer
 from uni_fuzzer.core.reporting import Finding
 from uni_fuzzer.fuzzers.detection import detectPathTraversal
 from uni_fuzzer.core.baseline import getBaseline
@@ -16,26 +13,14 @@ cfg = get_cfg()
 
 log = logging.getLogger(__name__)
 
-MAX_SAMPLES_PER_GROUP = cfg["path_traversal"]["max_samples_per_group"]
+class PathFuzzer(AbstractFuzzer):
 
-class PathFuzzer:
+    def __init__(self, baseUrl, wordlistPath=None, maxDepth=None, loginUsername=None, loginPassword=None,loginPath=None, session=None, auth=None, bailEvent=None):
 
-    def __init__(self, baseUrl, wordlistPath= None, outputToFile = False, maxDepth= None,loginUsername=None,loginPassword=None, loginPath=None, session =None, auth= None,bailEvent=None):
-        self.baseUrl = baseUrl
-        self.wordlistPath = wordlistPath
-        self.outputToFile = outputToFile
-        self.maxDepth =  maxDepth if maxDepth is not None else cfg["fuzz"]["max_depth_default"]
+        super().__init__(baseUrl=baseUrl, session=session, wordlistPath=wordlistPath, bailEvent=bailEvent, cfg=cfg)
+
+        self.maxDepth =  maxDepth if maxDepth is not None else self.cfg["fuzz"]["max_depth_default"]
         self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
-        self.bailEvent = bailEvent
-
-        # Authentication
-        self.session = session or requests.Session()
-        if session is None:
-            mw = int(cfg["concurrency"]["max_workers"])
-            adapter = HTTPAdapter(pool_connections=mw, pool_maxsize=mw, max_retries=0)
-            self.session.mount("http://", adapter)
-            self.session.mount("https://", adapter)
-            self.session.trust_env = False
         self.loginUsername = loginUsername
         self.loginPassword = loginPassword
         self.loginPath = loginPath
@@ -49,11 +34,11 @@ class PathFuzzer:
         self.interesting200 = []
         self.interesting = []
 
-        self.headers = {"User-Agent": cfg["http"]["user_agent"]}
-        if cfg["http"]["add_referer"]:
+        self.headers = {"User-Agent": self.cfg["http"]["user_agent"]}
+        if self.cfg["http"]["add_referer"]:
             self.headers["Referer"] = self.baseUrl
 
-        self.excludedExtensions = cfg["fuzz"]["excluded_extensions"]
+        self.excludedExtensions = self.cfg["fuzz"]["excluded_extensions"]
 
         if self.auth and self.loginUsername and self.loginPassword:
             ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
@@ -61,6 +46,9 @@ class PathFuzzer:
                 status("[!] HTTP login in PathFuzzer failed")
                 log.warning("HTTP login in PathFuzzer failed")
 
+        self.baseline = None
+
+    def prepare(self, ctx):
         self.baseline = getBaseline(self.session, self.baseUrl, self.headers)
 
     def  fuzzPath(self, path, currDepth= 0):
@@ -90,169 +78,116 @@ class PathFuzzer:
         if currDepth > self.maxDepth:
             return
 
-        tasks = []
-        interestingResults  = []
-
         parsed = urlparse(self.baseUrl)
         base = f"{parsed.scheme}://{parsed.netloc}"
 
-        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
-            # Fuzz with all payloads
-            for payload in self.payloads:
-                # If bail on first then bail
-                if self.bailEvent and self.bailEvent.is_set():
-                    break
-                # Check for /
-                basePath = path if path.endswith('/') else path + '/'
-                fullPath = basePath + payload
+        batch = []
 
-                normalizedPayloadPath = PurePosixPath(fullPath).as_posix().rstrip("/") or "/"
-
-                with self.lock:
-                    if normalizedPayloadPath in self.visitedPaths:
-                        continue
-                    self.visitedPaths.add(normalizedPayloadPath)
-
-                targetUrl = f"{base}/{fullPath.lstrip('/')}"
-
-                tasks.append(executor.submit( self.sendRequest, targetUrl, currDepth,isParamFuzzing= False, payload =payload))
-
-            for future in as_completed(tasks):
-                try:
-                    result = future.result()
-                except Exception:
-                    log.debug("Path fuzz future failed", exc_info=True)
-                    continue
-                if result and result["type"] == "interesting_200":
-                    url = result["data"]["url"]
-                    parsed = urlparse(url)
-                    interestingResults.append((parsed.path or "/", result["data"]["depth"]))
-        # If bail on first then bail
-        if self.bailEvent and self.bailEvent.is_set():
-            return
-        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["path_workers_recursive"]) as executor:
-            # Recurse on new 200 paths that are interesting
-            futures = []
-            for (interestingPath, nextDepth) in interestingResults:
-                normalized = PurePosixPath(interestingPath).as_posix().rstrip("/") or "/"
-
-                with self.lock:
-                    if normalized in self.visitedFuzzPaths:
-                        continue
-
-                    self.visitedFuzzPaths.add(normalized)
-                futures.append(executor.submit(self.fuzzPath, interestingPath, nextDepth))
-
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception:
-                    log.debug("Path recursive future failed", exc_info=True)
-
-    def sendRequest(self, url, depth, isParamFuzzing= False,payload= None):
-        """
-            Send a GET request and check for success
-        """
-        try:
+        for payload in self.payloads:
             # If bail on first then bail
             if self.bailEvent and self.bailEvent.is_set():
-                return
-            response = self.session.get(url, headers=self.headers, timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
+                break
+            # Check for /
+            basePath = path if path.endswith('/') else path + '/'
+            fullPath = basePath + payload
 
-            resultType, indicator = detectPathTraversal(response,self.baseline)
-            statusC = response.status_code
+            normalizedPayloadPath = PurePosixPath(fullPath).as_posix().rstrip("/") or "/"
 
-            # Skip if too similar
-            if resultType == "skip_similar":
-                return None
+            with self.lock:
+                if normalizedPayloadPath in self.visitedPaths:
+                    continue
+                self.visitedPaths.add(normalizedPayloadPath)
 
-            # If an interesting_200 then add to results
-            if resultType == "interesting_200" and not isParamFuzzing:
-                result = Finding(
-                    type="interesting_200",
-                    url=url,
-                    method="GET",
-                    payload=payload,
-                    status_code=statusC,
-                    response_snippet=(response.text or "")[:200]
-                )
-                with self.lock:
-                    self.interesting200.append(result)
+            targetUrl = f"{base}/{fullPath.lstrip('/')}"
+            meta = {"payload": payload, "depth": currDepth, "kind": "path"}
+            batch.append(("GET", targetUrl, {"headers": self.headers}, meta))
 
-                return {"type": "interesting_200", "data": {"url": url, "depth": depth + 1}}
+        self.prepare(None) if self.baseline is None else None
+        # Execute via base helper
+        findings = self.runBatch(batch, concurrency=self.cfg["concurrency"]["max_workers"])
 
-            if resultType == "vulnerable":
-                with self.lock:
-                    kind = "param" if isParamFuzzing else "path"
-                    pageKey = (url if isParamFuzzing else urlparse(url).path).split("?", 1)[0].split("#", 1)[0]
+        # Pick up interesting_200 and recurse
+        interestingResults = []
+        for find in findings:
+            if getattr(find, "type", None) == "interesting_200":
+                url = find.url
+                parse = urlparse(url)
+                interestingResults.append((parse.path or "/", (currDepth + 1)))
 
-                    resultsKey = (pageKey, indicator or "N/A", kind)
+        if self.bailEvent and self.bailEvent.is_set():
+            return
 
-                    # First timer
-                    if resultsKey not in self.vulnerablePaths:
-                        self.vulnerablePaths[resultsKey] = Finding(
-                            type=kind,
-                            url=url,
-                            method="GET",
-                            payload=payload,
-                            indicator=(indicator or "N/A"),
-                            status_code=statusC,
-                            count=1,
-                            payload_samples=[payload] if payload else [],
-                            response_snippet=(response.text or "")[:200]
-                        )
+        for (interestingPath, nextDepth) in interestingResults:
+            normalized = PurePosixPath(interestingPath).as_posix().rstrip("/") or "/"
 
-                        if self.bailEvent:
-                            try:
-                                self.bailEvent.set()
-                            except Exception:
-                                log.debug("Failed to set bailEvent in PathFuzzer", exc_info=True)
+            with self.lock:
+                if normalized in self.visitedFuzzPaths:
+                    continue
 
-                    else:
-                        res = self.vulnerablePaths[resultsKey]
-                        res.count = (res.count or 0) + 1
+                self.visitedFuzzPaths.add(normalized)
+            self.fuzzPath(interestingPath, nextDepth)
 
-                        if payload and (len(res.payload_samples) < MAX_SAMPLES_PER_GROUP) and (
-                                payload not in res.payload_samples):
-                            res.payload_samples.append(payload)
 
-                return {"type": "vulnerable", "data": self.vulnerablePaths[resultsKey]}
+    def analyzeResponse(self, response, meta):
+        """
+            Analyze the responses and return findings
+        """
+        resultType, indicator = detectPathTraversal(response, self.baseline)
+        statusC = response.status_code
+        meta = meta or {}
+        payload = meta.get("payload")
 
-            elif resultType == "interesting" and not isParamFuzzing:
+        # Skip if too similar
+        if resultType == "skip_similar":
+            return None
 
-                finding = Finding(
-                    type="interesting",
-                    url=url,
-                    method="GET",
-                    payload=payload,
-                    status_code=statusC
-                )
+        params = ("?" in (response.url or "")) or (meta.get("kind") == "params")
 
-                with self.lock:
-                    self.interesting.append(finding)
+        # If an interesting_200 then add to results and recurse
+        if resultType == "interesting_200":
+            result = Finding(
+                type="interesting_200",
+                url=response.url,
+                method="GET",
+                payload=payload,
+                status_code=statusC,
+                response_snippet=(response.text or "")[:200]
+            )
+            with self.lock:
+                self.interesting200.append(result)
 
-                #Prevent recursion on files
-                parsed = urlparse(url).path.lower()
+            return result
 
-                if any(parsed.endswith(ext) for ext in self.excludedExtensions) or '.php/' in parsed:
-                    return None
+        # If an interesting then add to results
+        if resultType == "interesting":
+            res = Finding(
+                type="interesting",
+                url=response.url,
+                method="GET",
+                payload=payload,
+                status_code=statusC,
+                indicator=indicator
+            )
+            with self.lock:
+                self.interesting.append(res)
+            return res
 
-                return {
-                    "type": "interesting",
-                    "data": {
-                        "url": url,
-                        "depth": depth + 1,
-                        "status_code": statusC,
-                        "payload": payload
-                    }
-                }
-
-        except requests.exceptions.Timeout:
-            # When fuzzing large endpoints timeouts overwhelm, disable if needed
-            log.debug("Path request timeout for %s", url, exc_info=True)
-
-        except Exception:
-            log.debug("Path request failed for %s", url, exc_info=True)
+        # If vulnerability hit add to results
+        if resultType == "vulnerable":
+            # First timer
+            resType = "param" if params else "path"
+            res = Finding(
+                type=resType,
+                url=response.url,
+                method="GET",
+                payload=payload,
+                status_code=statusC,
+                indicator=indicator
+            )
+            with self.lock:
+                key = (response.url.split("?", 1)[0], indicator, resType)
+                self.vulnerablePaths[key] = res
+            return res
 
         return None
 
@@ -263,29 +198,31 @@ class PathFuzzer:
         parsed = urlparse(self.baseUrl)
 
         if "FUZZ" not in parsed.query:
-            print("[-] No 'FUZZ' keyword found")
+            status("[-] No 'FUZZ' keyword found")
             return []
 
         baseNoQuery = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
         originalQuery = parsed.query
 
-        tasks = []
+        batch = []
 
-        with ThreadPoolExecutor(max_workers=cfg["concurrency"]["max_workers"]) as executor:
-            for payload in self.payloads:
-                # Replace FUZZ with the payload
-                fuzzedQuery = originalQuery.replace("FUZZ", payload)
+        for raw in self.payloads:
+            if self.bailEvent and self.bailEvent.is_set():
+                break
+            enc = quote(raw, safe="")
+            # Replace FUZZ with the payload
+            fuzzedQuery = originalQuery.replace("FUZZ", enc)
 
-                fullUrl = f"{baseNoQuery}?{fuzzedQuery}"
+            fullUrl = f"{baseNoQuery}?{fuzzedQuery}"
 
-                tasks.append(executor.submit(self.sendRequest, fullUrl, 0, isParamFuzzing=True, payload= payload))
+            meta = {"payload": raw, "kind": "params"}
+            batch.append(("GET", fullUrl, {"headers": self.headers}, meta))
 
-            for future in as_completed(tasks):
-                try:
-                    _ = future.result()
-                except Exception:
-                    log.debug("Param fuzz future failed", exc_info=True)
+        if self.baseline is None:
+            self.prepare(None)
 
-        grouped = [v for (k_url, k_ind, k_kind), v in self.vulnerablePaths.items() if k_kind == "param"]
-        return grouped
+        # Execute via base helper
+        findings = self.runBatch(batch, concurrency=self.cfg["concurrency"]["max_workers"])
+
+        return findings
 

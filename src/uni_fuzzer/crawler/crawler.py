@@ -20,13 +20,12 @@ log = logging.getLogger(__name__)
 
 class Crawler:
 
-    def __init__(self, mode=None, maxPages=None, rateLimit=None, headless=None, outputToFile=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None):
+    def __init__(self, mode=None, maxPages=None, rateLimit=None, headless=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None):
         # Crawler settings
         self.mode = mode or cfg["crawler"]["mode_default"]
         self.maxPages = maxPages if maxPages is not None else cfg["crawler"]["max_pages_default"]
         self.rateLimit = rateLimit if rateLimit is not None else cfg["crawler"]["rate_limit_default"]
         self.headless = headless if headless is not None else cfg["crawler"]["headless_default"]
-        self.outputToFile = outputToFile if outputToFile is not None else cfg["crawler"]["output_to_file_default"]
 
         self.auth = auth
         self.loginUsername = loginUsername

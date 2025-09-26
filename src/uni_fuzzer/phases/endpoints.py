@@ -103,7 +103,6 @@ class EndpointsPhase (FuzzerPhase):
                 path_fuzzer = PathFuzzer(
                     baseUrl=fullUrl,
                     wordlistPath= self.wordlistPathsParams,
-                    outputToFile=args.output_to_file,
                     session=sess,
                     auth=False,
                     bailEvent=bail
@@ -136,7 +135,6 @@ class EndpointsPhase (FuzzerPhase):
                 param_fuzzer = PathFuzzer(
                     baseUrl=fuzzedUrl,
                     wordlistPath=self.wordlistPathsParams,
-                    outputToFile=args.output_to_file,
                     session=sess,
                     auth=False,
                     bailEvent=bail
@@ -162,7 +160,6 @@ class EndpointsPhase (FuzzerPhase):
                     baseUrl=fuzzedUrl,
                     useCrawler=False,
                     wordlistPath=self.wordlistXss,
-                    outputToFile=args.output_to_file,
                     headless=not args.no_headless,
                     session=sess,
                     auth=False,

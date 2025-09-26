@@ -36,6 +36,7 @@ class DomXSSPhase(FuzzerPhase):
 
         status(f"\n[+] Running Dom XSS on discovered forms/endpoints...\n")
         domSessPool = []
+        domSess = None
         try:
             domSessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path,
                                         desiredTasks=1,
@@ -53,7 +54,6 @@ class DomXSSPhase(FuzzerPhase):
                 baseUrl=args.start_url,
                 useCrawler=False,
                 wordlistPath=self.wordlistXss,
-                outputToFile=args.output_to_file,
                 headless=not args.no_headless,
                 session=domSess,
                 auth=args.auth,

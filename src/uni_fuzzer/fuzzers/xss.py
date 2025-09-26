@@ -31,11 +31,10 @@ MAX_SAMPLES_PER_GROUP = cfg["xss"]["max_samples_per_group"]
 
 class XSSFuzzer:
 
-    def __init__(self, baseUrl, useCrawler = False, outputToFile= False, wordlistPath=None, headless= True, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False, token= None, bailEvent=None):
+    def __init__(self, baseUrl, useCrawler = False, wordlistPath=None, headless= True, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False, token= None, bailEvent=None):
         self.baseUrl = baseUrl
         self.useCrawler = useCrawler
         self.wordlistPath = wordlistPath
-        self.outputToFile = outputToFile
         self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.token = token or f"XSSCanary-{uuid4().hex[:8]}"
         self.headless = headless

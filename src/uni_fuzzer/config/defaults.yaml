@@ -24,7 +24,6 @@ crawler:
   max_pages_default: 20
   rate_limit_default: 0.2
   headless_default: true
-  output_to_file_default: false
   option_capacity: 80
   junk_keywords:
     - "mat-"

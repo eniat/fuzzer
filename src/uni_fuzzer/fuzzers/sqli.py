@@ -24,11 +24,11 @@ TIMING_CONFIRM_PROBES  = cfg["sqli"]["timing_confirm_probes"]
 
 class SQLiFuzzer:
 
-    def __init__(self, baseUrl, useCrawler=False, outputToFile= False, wordlistPath=None, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False, bailEvent=None):
+    def __init__(self, baseUrl, useCrawler=False, wordlistPath=None, session=None, loginUsername=None, loginPassword=None, loginPath=None, auth=False, bailEvent=None):
         self.baseUrl = baseUrl
         self.useCrawler = useCrawler
         self.wordlistPath = wordlistPath
-        self.outputToFile = outputToFile
+
         self.bailEvent = bailEvent
 
         # Authentication
