@@ -223,6 +223,7 @@ class PathFuzzer(AbstractFuzzer):
 
         # Execute via base helper
         findings = self.runBatch(batch, concurrency=self.cfg["concurrency"]["max_workers"])
+        # Return only confirmed param vulns
+        return [f for f in findings if getattr(f, "type", "") == "param"]
 
-        return findings
 
