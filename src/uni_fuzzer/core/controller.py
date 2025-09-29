@@ -10,7 +10,7 @@ from uni_fuzzer.core.logging_setup import setupLogging
 from uni_fuzzer.crawler.crawler import Crawler
 from uni_fuzzer.fuzzers.path import PathFuzzer
 from uni_fuzzer.llm.semantic_llm import filterML
-from uni_fuzzer.fuzzers.xss import XSSFuzzer
+from uni_fuzzer.fuzzers.xss_param import ParamXSSFuzzer
 from uni_fuzzer.core.reporting import crawlerPrint, fuzzerPrint, crawlerJson, fuzzerJson
 from uni_fuzzer.core.utility import get_cfg, isFuzzableField, collapseDuplicates, sortWordlist, getParents, status
 cfg = get_cfg()
@@ -186,7 +186,7 @@ def run(args):
                 # XSS forms
                 phases.append(FormsPhase(run_xss_forms=True, run_xss_stored=False, run_sqli=False, run_sqli_b=False, wordlistXss=wordlistXss, wordlistSqli=wordlistSqli))
                 # XSS DOM
-                phases.append(DomXSSPhase(wordlistXss=wordlistXss))
+                phases.append(DomXSSPhase())
                 # XSS Stored
                 phases.append(FormsPhase(run_xss_forms=False, run_xss_stored=True, run_sqli=False, run_sqli_b=False, wordlistXss=wordlistXss, wordlistSqli=wordlistSqli))
                 # Path traversal
@@ -217,7 +217,7 @@ def run(args):
                 ))
 
             if arg.xss_dom:
-                phases.append(DomXSSPhase(wordlistXss=wordlistXss))
+                phases.append(DomXSSPhase())
 
             return phases
 
@@ -256,11 +256,9 @@ def run(args):
     # Fuzz a single target
     if args.xss_params:
 
-        fuzzer = XSSFuzzer(
+        fuzzer = ParamXSSFuzzer(
             baseUrl=args.start_url,
-            useCrawler=False,
             wordlistPath=wordlistXss,
-            headless=not args.no_headless,
             session=None,
             auth=args.auth,
             loginUsername=args.username,
@@ -268,7 +266,7 @@ def run(args):
             loginPath=args.login_path
         )
 
-        results = fuzzer.paramXSS()
+        results = fuzzer.run()
         allVulnerabilities = collapseDuplicates(results)
         fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
         if args.output_to_json:

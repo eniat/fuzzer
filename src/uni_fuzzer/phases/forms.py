@@ -6,7 +6,8 @@ from urllib.parse import urlparse, urljoin
 from uni_fuzzer.core.fuzzer import FuzzerPhase, PhaseContext
 from uni_fuzzer.core.utility import status, getDirectories
 from uni_fuzzer.auth.auth import buildSessions
-from uni_fuzzer.fuzzers.xss import XSSFuzzer
+from uni_fuzzer.fuzzers.xss_stored import StoredXSSFuzzer
+from uni_fuzzer.fuzzers.xss_form import FormXSSFuzzer
 from uni_fuzzer.fuzzers.sqli import SQLiFuzzer
 
 log = logging.getLogger(__name__)
@@ -68,18 +69,16 @@ class FormsPhase (FuzzerPhase):
 
                 status(f"[Thread] XSS Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
-                xss_form_fuzzer = XSSFuzzer(
+                xss_form_fuzzer = FormXSSFuzzer(
                     baseUrl=fullUrl,
-                    useCrawler=False,
                     wordlistPath=self.wordlistXss,
-                    headless=not args.no_headless,
                     session=sess,
                     auth=False,
                     token=ctx.runToken,
                     bailEvent=bail
                 )
 
-                res = xss_form_fuzzer.formXSS([form])
+                res = xss_form_fuzzer.run({"forms": [form], "endpoints": endpoints})
 
                 if res:
                     results.extend(res)
@@ -88,11 +87,9 @@ class FormsPhase (FuzzerPhase):
 
                 status(f"[Thread] XSS Stored Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
-                xss_stored_fuzzer = XSSFuzzer(
+                xss_stored_fuzzer = StoredXSSFuzzer(
                     baseUrl=fullUrl,
-                    useCrawler=False,
                     wordlistPath=self.wordlistXss,
-                    headless=not args.no_headless,
                     session=sess,
                     auth=False,
                     loginUsername=args.username,
@@ -110,7 +107,7 @@ class FormsPhase (FuzzerPhase):
                     if getDirectories(urlparse(endp["url"]).path) == formDir
                 ]
 
-                res = xss_stored_fuzzer.storedXSS([form], endpoints=relevantEndpoints)
+                res = xss_stored_fuzzer.run({"forms": [form], "endpoints": relevantEndpoints})
 
                 if res:
                     results.extend(res)
@@ -120,7 +117,7 @@ class FormsPhase (FuzzerPhase):
                 status(f"[Thread] SQLi Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
                 sqli_form_fuzzer = SQLiFuzzer(
-                    baseUrl=args.start_url,
+                    baseUrl=fullUrl,
                     useCrawler=False,
                     wordlistPath=self.wordlistSqli,
                     session=sess,
@@ -138,7 +135,7 @@ class FormsPhase (FuzzerPhase):
                 status(f"[Thread] SQLi Blind Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
                 sqli_blind_fuzzer = SQLiFuzzer(
-                    baseUrl=args.start_url,
+                    baseUrl=args.fullUrl,
                     useCrawler=False,
                     wordlistPath=self.wordlistSqli,
                     session=sess,

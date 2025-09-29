@@ -52,18 +52,30 @@ class AbstractFuzzer (ABC):
             return  None
 
         try:
+            # To allow overrides
+            allow = kwargs.pop("allow_redirects", None)
+            timeout = kwargs.pop("timeout", None)
+
             kwargs.setdefault("headers", self.headers)
             if method.upper() == "POST":
-                return self.session.post( url, timeout=self.cfg["http"]["timeout_post_seconds"], allow_redirects=self.cfg["http"]["redirects"]["fuzz_post"], **kwargs)
+                if allow is None:
+                    allow = self.cfg["http"]["redirects"]["fuzz_post"]
+                if timeout is None:
+                    timeout = self.cfg["http"]["timeout_post_seconds"]
+                return self.session.post( url, timeout=timeout, allow_redirects=allow, **kwargs)
 
             else:
-                return self.session.get(url, timeout=self.cfg["http"]["timeout_get_seconds"], allow_redirects=self.cfg["http"]["redirects"]["fuzz_get"], **kwargs)
+                if allow is None:
+                    allow = self.cfg["http"]["redirects"]["fuzz_get"]
+                if timeout is None:
+                    timeout = self.cfg["http"]["timeout_get_seconds"]
+                return self.session.get(url, timeout=timeout, allow_redirects=allow, **kwargs)
 
         except Exception:
             log.debug("sendRequest failed: %s %s", method, url, exc_info=True)
             return None
 
-    def runBatch (self, requestsList, concurrency =None):
+    def runBatch (self, requestsList, concurrency =None, collectRaw=False):
         """
             Run a batch of requests and return the findings
         """
@@ -98,6 +110,11 @@ class AbstractFuzzer (ABC):
                     continue
 
                 meta = futures[fut] or {}
+
+                # If raw responses required
+                if collectRaw:
+                    findings.append((res, meta))
+                    continue
 
                 try:
                     finding = self.analyzeResponse(res, meta)

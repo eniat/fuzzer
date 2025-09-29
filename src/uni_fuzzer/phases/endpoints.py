@@ -8,7 +8,7 @@ from uni_fuzzer.core.fuzzer import FuzzerPhase, PhaseContext
 from uni_fuzzer.core.utility import status, getParents, getDirectories
 from uni_fuzzer.auth.auth import buildSessions
 from uni_fuzzer.fuzzers.path import PathFuzzer
-from uni_fuzzer.fuzzers.xss import XSSFuzzer
+from uni_fuzzer.fuzzers.xss_param import ParamXSSFuzzer
 
 log = logging.getLogger(__name__)
 
@@ -156,18 +156,16 @@ class EndpointsPhase (FuzzerPhase):
                 status(f"[Thread] XSS Param Fuzzing: {fuzzedUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
 
-                xss_param_fuzzer = XSSFuzzer(
+                xss_param_fuzzer = ParamXSSFuzzer(
                     baseUrl=fuzzedUrl,
-                    useCrawler=False,
                     wordlistPath=self.wordlistXss,
-                    headless=not args.no_headless,
                     session=sess,
                     auth=False,
                     token=ctx.runToken,
                     bailEvent=bail
                 )
 
-                res = xss_param_fuzzer.paramXSS()
+                res = xss_param_fuzzer.run()
 
                 if res:
                     results.extend(res)

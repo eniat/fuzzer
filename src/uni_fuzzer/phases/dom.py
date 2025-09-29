@@ -4,7 +4,7 @@ import threading
 from uni_fuzzer.core.fuzzer import FuzzerPhase, PhaseContext
 from uni_fuzzer.core.utility import status
 from uni_fuzzer.auth.auth import buildSessions
-from uni_fuzzer.fuzzers.xss import XSSFuzzer
+from uni_fuzzer.fuzzers.xss_dom import DomXSSFuzzer
 
 log = logging.getLogger(__name__)
 
@@ -13,9 +13,6 @@ class DomXSSPhase(FuzzerPhase):
     """
         Runs the dom fuzzer with the given args
     """
-
-    def __init__(self, wordlistXss):
-        self.wordlistXss = wordlistXss
 
 
     @property
@@ -30,8 +27,13 @@ class DomXSSPhase(FuzzerPhase):
 
         args = ctx.args
 
-        # Check for wordlists and Forms if not set False
-        if not self.wordlistXss or not ctx.forms:
+        forms = ctx.forms or []
+        endpoints = ctx.endpoints or []
+        if not forms and not endpoints:
+            return []
+
+        # Check for endpoints and Forms if not set False
+        if not forms and not endpoints:
             return []
 
         status(f"\n[+] Running Dom XSS on discovered forms/endpoints...\n")
@@ -50,10 +52,8 @@ class DomXSSPhase(FuzzerPhase):
 
         try:
             bail = threading.Event() if args.bail_on_hit else None
-            xss_dom_fuzzer = XSSFuzzer(
+            xss_dom_fuzzer = DomXSSFuzzer(
                 baseUrl=args.start_url,
-                useCrawler=False,
-                wordlistPath=self.wordlistXss,
                 headless=not args.no_headless,
                 session=domSess,
                 auth=args.auth,
@@ -64,7 +64,12 @@ class DomXSSPhase(FuzzerPhase):
                 bailEvent=bail
             )
 
-            return  xss_dom_fuzzer.domXSS(forms=ctx.forms, endpoints=ctx.endpoints)
+            findings = xss_dom_fuzzer.run(ctx) or []
+            return findings
+
+        except Exception:
+            log.debug("DOM phase failed", exc_info=True)
+            return []
 
         finally:
             if domSessPool:
