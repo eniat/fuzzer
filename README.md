@@ -87,10 +87,7 @@ You may have to edit the selectors based on the login page of the webapp. That c
 Crawler + all fuzzers in sequence, with auth and full reporting:
 
 ```bash
-fuzz https://target.tld \
-  --auth --username user --password password --login-path /login.php \
-  --swordlist sql --xwordlist XSS-Jhaddix --pwordlist LFI-Jhaddix \
-  --all --use-crawler --report-all --output-to-file
+fuzz https://target.tld --auth --username user --password password --login-path /login.php --swordlist sql --xwordlist XSS-Jhaddix --pwordlist LFI-Jhaddix--all --use-crawler --report-all --output-to-file
 ```
 
 What happens:
@@ -105,65 +102,43 @@ What happens:
 **Path traversal only (with crawler)**
 
 ```bash
-fuzz https://target.tld \
-  --use-crawler \
-  --pwordlist LFI-Jhaddix \
-  --fuzz-paths \
-  --report-all
+fuzz https://target.tld --use-crawler --pwordlist LFI-Jhaddix --fuzz-paths --report-all
 ```
 
 **XSS – reflected in query params (with crawler)**
 
 ```bash
-fuzz https://target.tld \
-  --use-crawler \
-  --xwordlist XSS-Jhaddix \
-  --xss-params
+fuzz https://target.tld --use-crawler --xwordlist XSS-Jhaddix --xss-params
 ```
 
 **XSS – forms only**
 
 ```bash
-fuzz https://target.tld \
-  --use-crawler \
-  --xwordlist XSS-Jhaddix \
-  --xss-forms
+fuzz https://target.tld --use-crawler --xwordlist XSS-Jhaddix --xss-forms
 ```
 
 **XSS – stored**
 
 ```bash
-fuzz https://target.tld \
-  --use-crawler \
-  --xwordlist XSS-Jhaddix \
-  --xss-stored
+fuzz https://target.tld --use-crawler --xwordlist XSS-Jhaddix --xss-stored
 ```
 
 **XSS – DOM (requires Chrome)**
 
 ```bash
-fuzz https://target.tld \
-  --use-crawler \
-  --xwordlist XSS-Jhaddix \
-  --xss-dom
+fuzz https://target.tld --use-crawler --xwordlist XSS-Jhaddix --xss-dom
 ```
 
 **SQLi – error/content-based**
 
 ```bash
-fuzz https://target.tld \
-  --use-crawler \
-  --swordlist sql \
-  --fuzz-sqli
+fuzz https://target.tld --use-crawler --swordlist sql --fuzz-sqli
 ```
 
 **SQLi – blind (boolean + timing with confirmation)**
 
 ```bash
-fuzz https://target.tld \
-  --use-crawler \
-  --swordlist sql \
-  --fuzz-sqli-b
+fuzz https://target.tld --use-crawler --swordlist sql --fuzz-sqli-b
 ```
 
 ### Single-URL mode (no crawler)
@@ -173,17 +148,13 @@ When you **don’t** use `--use-crawler`, param fuzzers expect a **`FUZZ` placeh
 **Param traversal (single URL)**
 
 ```bash
-fuzz "https://target.tld/download?file=FUZZ" \
-  --pwordlist LFI-Jhaddix \
-  --fuzz-params
+fuzz "https://target.tld/download?file=FUZZ" --pwordlist LFI-Jhaddix --fuzz-params
 ```
 
 **XSS in params (single URL)**
 
 ```bash
-fuzz "https://target.tld/search?q=FUZZ" \
-  --xwordlist XSS-Jhaddix \
-  --xss-params
+fuzz "https://target.tld/search?q=FUZZ" --xwordlist XSS-Jhaddix --xss-params
 ```
 
 > With the crawler enabled, the controller builds `?param=FUZZ` for you automatically. Without the crawler, you must include `FUZZ` yourself.
