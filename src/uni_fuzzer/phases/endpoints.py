@@ -7,7 +7,8 @@ from pathlib import PurePosixPath
 from uni_fuzzer.core.fuzzer import FuzzerPhase, PhaseContext
 from uni_fuzzer.core.utility import status, getParents, getDirectories
 from uni_fuzzer.auth.auth import buildSessions
-from uni_fuzzer.fuzzers.path import PathFuzzer
+from uni_fuzzer.fuzzers.path_traversal import TraversalPathFuzzer
+from uni_fuzzer.fuzzers.path_param import ParamPathFuzzer
 from uni_fuzzer.fuzzers.xss_param import ParamXSSFuzzer
 
 log = logging.getLogger(__name__)
@@ -100,7 +101,7 @@ class EndpointsPhase (FuzzerPhase):
                 status(f"[Thread] Path Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
 
-                path_fuzzer = PathFuzzer(
+                path_fuzzer = TraversalPathFuzzer(
                     baseUrl=fullUrl,
                     wordlistPath= self.wordlistPathsParams,
                     session=sess,
@@ -112,7 +113,7 @@ class EndpointsPhase (FuzzerPhase):
                 path_fuzzer.lock = ctx.shared["globalVisitedLock"]
 
                 for path in getParents(urlparse(fullUrl).path):
-                    path_fuzzer.fuzzPath(path)
+                    path_fuzzer.run(path=path)
 
                 if path_fuzzer.vulnerablePaths:
                     results.extend(list(path_fuzzer.vulnerablePaths.values()))
@@ -132,18 +133,15 @@ class EndpointsPhase (FuzzerPhase):
                 status(f"[Thread] Param Fuzzing: {fuzzedUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
 
-                param_fuzzer = PathFuzzer(
+                param_fuzzer = ParamPathFuzzer(
                     baseUrl=fuzzedUrl,
                     wordlistPath=self.wordlistPathsParams,
                     session=sess,
                     auth=False,
                     bailEvent=bail
                 )
-                param_fuzzer.visitedPaths = ctx.shared["globalVisitedPaths"]
-                param_fuzzer.visitedFuzzPaths = ctx.shared["globalVisitedFuzzPaths"]
-                param_fuzzer.lock = ctx.shared["globalVisitedLock"]
 
-                res = param_fuzzer.fuzzParams()
+                res = param_fuzzer.run()
                 if res:
                     results.extend(res)
 

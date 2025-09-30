@@ -106,15 +106,11 @@ xss:
     - "';localStorage.setItem(\"x\",\"{CANARY}\")//"
     - "\";sessionStorage.setItem(\"y\",\"{CANARY}\")//"
     - "</script><script>window.__XSS_CANARY__=\"{CANARY}\"</script>"
-    - "{CANARY}"
   dom_delay_seconds: 0.25
   stored_settle_seconds: 3
   regex:
-    script: "<script[^>]*>(?:(?!</script>).)*({token})(?:(?!</script>).)*</script>"
     attr: "\\bon\\w+\\s*=\\s*(['\\\"]).*?({token}).*?\\1"
     jsurl: "(?:href|src)\\s*=\\s*(['\\\"])\\s*javascript:.*?({token}).*?\\1"
-    html_comment: "<!--(?:(?!-->).)*{token}(?:(?!-->).)*-->"
-    raw_html: "(?:^|>)[^<]*{token}[^<]*(?:<|$)"
   max_samples_per_group: 3
 
 sqli:
@@ -203,6 +199,9 @@ paths:
     - "interesting"
     - "interesting 200"
     - "interesting_200"
+    - "xss_form"
+    - "xss_param"
+    - "xss_dom"
   auto_submit_keys:
     - "submit"
     - "btn"

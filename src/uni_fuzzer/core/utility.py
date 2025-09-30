@@ -57,6 +57,7 @@ def collapseDuplicates (items: list[Finding]) -> list[Finding]:
     """
     groups = {}
     storedGroups = {}
+    xssGroups = {}
     emitted: list[Finding] = []
 
     cfg = get_cfg()
@@ -134,6 +135,67 @@ def collapseDuplicates (items: list[Finding]) -> list[Finding]:
                         rep.status_code = item.status_code
                 except Exception:
                     log.debug("Failed to update status_code in stored XSS group", exc_info=True)
+
+            continue
+
+        # Collapse the other xss
+        if typ in ("xss_form", "xss_param", "xss_dom"):
+            p = urlparse(rawUrl)
+            scheme = (p.scheme or "").lower()
+            host = (p.netloc or "").lower()
+            path = p.path or "/"
+
+            # Normalize path
+            if path != "/" and path.endswith("/"):
+                path = path.rstrip("/")
+
+            pageUrl = f"{scheme}://{host}{path}"
+            indicator = (item.indicator or "N/A")
+            key = (typ, host, path, indicator)
+
+            # counts and samples
+            count = int(item.count or 0)
+            samples = list(item.payload_samples or [])
+            if not samples and item.payload is not None:
+                samples = [item.payload]
+
+            if key not in xssGroups:
+                rep = Finding(
+                    type=typ,
+                    url=pageUrl,
+                    method=item.method or "GET",
+                    param=item.param,
+                    payload=item.payload,
+                    indicator=indicator,
+                    status_code=item.status_code,
+                    count=0,
+                    payload_samples=[],
+                    response_snippet=(item.response_snippet or "")[:200]
+                )
+                rep.count = (rep.count or 0) + (count or 1)
+
+                for sample in samples:
+                    if sample is not None and len(rep.payload_samples) < XSS_MAX_SAMPLES:
+                        if sample not in rep.payload_samples:
+                            rep.payload_samples.append(sample)
+
+                xssGroups[key] = rep
+                emitted.append(rep)
+
+            else:
+                rep = xssGroups[key]
+                rep.count = (rep.count or 0) + (count or 1)
+
+                for sample in samples:
+                    if sample is not None and len(rep.payload_samples) < XSS_MAX_SAMPLES:
+                        if sample not in rep.payload_samples:
+                            rep.payload_samples.append(sample)
+
+                try:
+                    if int(item.status_code or 0) > int(rep.status_code or 0):
+                        rep.status_code = item.status_code
+                except Exception:
+                    log.debug("Failed to update status_code in XSS group", exc_info=True)
 
             continue
 

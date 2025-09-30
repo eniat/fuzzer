@@ -1,7 +1,7 @@
 import re
 import logging
 from difflib import SequenceMatcher
-from urllib.parse import quote, unquote_plus
+from urllib.parse import unquote_plus
 from html import escape, unescape
 
 from uni_fuzzer.core.utility import get_cfg
@@ -10,115 +10,64 @@ cfg = get_cfg()
 log = logging.getLogger(__name__)
 
 # Regex templates for XSS injections
-SCRIPT_RE = cfg["xss"]["regex"]["script"]
-ATTR_RE = cfg["xss"]["regex"]["attr"]
-JSURL_RE = cfg["xss"]["regex"]["jsurl"]
-RAW_HTML_RE = cfg["xss"]["regex"]["raw_html"]
-HTML_COMMENT_RE = cfg["xss"]["regex"]["html_comment"]
 JS_STRINGS   = re.compile(r"""(['"])(?:\\.|(?!\1).)*\1""", re.S)
 JS_LINECOM   = re.compile(r"//[^\n\r]*")
 JS_BLOCKCOM  = re.compile(r"/\*.*?\*/", re.S)
 SCRIPT_BLOCK = re.compile(r"<script[^>]*>(.*?)</script>", re.I | re.S)
-# Cache for regex objects to avoid recompiling
-_REGEX_CACHE = {}
 
-# To exclude SQL errors when looking for XSS
+# To detect SQL errors
 SQL = cfg["sqli"]["error_signatures"]
 
-# SQL Detection
+# SQL Blind Detection
 TIMING_THRESHOLD_MS = cfg["sqli"]["timing_threshold_ms"]
 BLIND_FACTOR  = cfg["sqli"]["blind_timing_factor"]
 BOOLEAN_SUCCESS_KEYWORDS = cfg["sqli"]["boolean_success_keywords"]
 BOOLEAN_FAILURE_KEYWORDS = cfg["sqli"]["boolean_failure_keywords"]
 
-def detectXSS(body, token, markedPayload):
+def detectXSS(body, token):
     """
         If token appears then it's worked
     """
-    lowerBody = (body or "").lower()
+    raw = body or ""
+    rawLow = raw.lower()
     token = (token or "").lower()
-    lowerBodyQ = unquote_plus(body).lower()
-    lowerBodyU = unescape(body or "").lower()
+    lowerBodyQ = unquote_plus(raw).lower()
+    lowerBodyU = unescape(raw).lower()
 
-    if token not in lowerBody and token not in lowerBodyU and token not in lowerBodyQ:
+    # Token needs to appear in executable
+    if token not in rawLow and token not in lowerBodyU and token not in lowerBodyQ:
         return False, None
 
-    # cache regex for this token
-    if token not in _REGEX_CACHE:
-
-        if len(_REGEX_CACHE) >= 32:
-            _REGEX_CACHE.clear()
-
-        _REGEX_CACHE[token] = (
-            re.compile(SCRIPT_RE.format(token=re.escape(token)), re.I | re.S),
-            re.compile(ATTR_RE.format(token=re.escape(token)), re.I | re.S),
-            re.compile(JSURL_RE.format(token=re.escape(token)), re.I | re.S),
-            re.compile(RAW_HTML_RE.format(token=re.escape(token)), re.I | re.S),
-            re.compile(HTML_COMMENT_RE.format(token=re.escape(token)), re.I | re.S)
-        )
-
-    script_re, attr_re, jsurl_re, raw_re, cmt_re = _REGEX_CACHE[token]
-
-    # Filter SQL errors
-    if any(err.lower() in lowerBody for err in SQL) or any(err.lower() in lowerBodyU for err in SQL):
-        return False, None
-
-    # Check if token survives removal of strings ect
-    if script_re.search(lowerBodyU):
-        for blk in SCRIPT_BLOCK.findall(lowerBodyU):
+    # Check raw non escaped block
+    blocks = SCRIPT_BLOCK.findall(raw)
+    if blocks:
+        for blk in blocks:
             cleaned = JS_BLOCKCOM.sub("", blk)
             cleaned = JS_LINECOM.sub("", cleaned)
             cleaned = JS_STRINGS.sub("", cleaned)
             if token in cleaned.lower():
-                log.debug("XSS detected: script_ctx (token=%s)", token)
+                log.debug("XSS detected: script_ctx (token=%s) [RAW script block]", token)
                 return True, "script_ctx"
 
-    # fallback
-    if script_re.search(lowerBody):
-        for blk in SCRIPT_BLOCK.findall(lowerBody):
-            cleaned = JS_BLOCKCOM.sub("", blk)
-            cleaned = JS_LINECOM.sub("", cleaned)
-            cleaned = JS_STRINGS.sub("", cleaned)
-            if token in cleaned.lower():
+        # Checks if canary is inside JS String
+        canaryJs = re.compile(r'(?:^|[^a-z0-9_])(?:window\.)?__xss_canary__\s*[:=]\s*["\']?\s*' + re.escape(token) + r'\s*["\']?',re.I)
+        for blk in blocks:
+            if canaryJs.search(blk.lower()):
+                log.debug("XSS detected: script_ctx (token=%s) [RAW canary in script]", token)
                 return True, "script_ctx"
 
-    # Checks if canary is inside JS String
-    canaryJs = re.compile(r'(?:^|[^a-z0-9_])(?:window\.)?__xss_canary__\s*[:=]\s*["\']?\s*' + re.escape(token) + r'\s*["\']?',re.I)
-    if canaryJs.search(lowerBodyU) or canaryJs.search(lowerBody):
-        log.debug("XSS detected: script_ctx (token=%s)", token)
-        return True, "script_ctx"
+    ATTR_TPL = cfg["xss"]["regex"]["attr"]
+    JSURL_TPL = cfg["xss"]["regex"]["jsurl"]
 
+    ATTR_RE = re.compile(ATTR_TPL.format(token=re.escape(token)), re.I | re.S)
+    JSURL_RE = re.compile(JSURL_TPL.format(token=re.escape(token)), re.I | re.S)
     # Check if xss is in dangerous contexts
-    if attr_re.search(lowerBodyU) or jsurl_re.search(lowerBodyU):
-        log.debug("XSS detected: attr_ctx (token=%s)", token)
+    if ATTR_RE.search(rawLow) or JSURL_RE.search(rawLow):
+        log.debug("XSS detected: attr_ctx (token=%s) [RAW attribute/jsurl]", token)
         return True, "attr_ctx"
-    if attr_re.search(lowerBody) or jsurl_re.search(lowerBody):
-        log.debug("XSS detected: attr_ctx (token=%s)", token)
-        return True, "attr_ctx"
-    if raw_re.search(body) or raw_re.search(lowerBodyU) or raw_re.search(lowerBodyQ) or \
-            cmt_re.search(body) or cmt_re.search(lowerBodyU) or cmt_re.search(lowerBodyQ):
-        log.debug("XSS detected: raw_html_ctx (token=%s)", token)
-        return True, "raw_html_ctx"
-
-    # Checks if canary is near inline handler like onmouseover
-    canaryNear = re.compile(r'on[a-z]+\s*=\s*[^>]{0,200}' + re.escape(token), re.I | re.S)
-    if canaryNear.search(lowerBodyU) or canaryNear.search(lowerBody):
-        log.debug("XSS detected: attr_ctx (token=%s)", token)
-        return True, "attr_ctx"
-
-    if markedPayload:
-        mp = str(markedPayload)
-        mpHtml = escape(mp, quote=True).lower()
-        mpUrl = quote(mp, safe="").lower()
-        mpUrlp = quote(mp, safe="").replace("%20", "+").lower()
-
-        if (mpHtml and (mpHtml in lowerBody or mpHtml in lowerBodyU)) or \
-                (mpUrl and (mpUrl in lowerBody or mpUrl in lowerBodyU or mpUrl in lowerBodyQ)) or \
-                (mpUrlp and (mpUrlp in lowerBody or mpUrlp in lowerBodyU or mpUrlp in lowerBodyQ)):
-            log.debug("XSS detected: raw_html_ctx (token=%s)", token)
-            return True, "raw_html_ctx"
 
     return False, None
+
 
 def detectSQLError(body):
     """

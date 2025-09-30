@@ -41,7 +41,7 @@ class DomXSSFuzzer(AbstractFuzzer):
         self.prepared = False
         self.payloads = []
 
-        if self.auth:
+        if self.auth and self.loginUsername and self.loginPassword:
             # Use the generic HTTP login in auth.py
             ok = login(
                 self.session,
@@ -140,8 +140,7 @@ class DomXSSFuzzer(AbstractFuzzer):
                 for marked in (self.payloads or []):
                     candidates.append((f"{fullUrl}#{quote(marked, safe='')}",marked))
 
-            if not candidates:
-                return []
+        candidates = list({(u, m) for (u, m) in candidates})
 
         # Configure the selenium webdriver
         options = Options()
@@ -257,7 +256,7 @@ class DomXSSFuzzer(AbstractFuzzer):
                     # To resolve false positives for dom_storage
                     if indicator == "dom_storage":
                         src = driver.page_source or ""
-                        ok, _ = detectXSS(src, self.token, self.token)
+                        ok, _ = detectXSS(src, self.token)
                         if not ok:
                             indicator = None
 
@@ -277,7 +276,7 @@ class DomXSSFuzzer(AbstractFuzzer):
                             # To resolve false positives for dom_storage
                             if indicator == "dom_storage_hash":
                                 src = driver.page_source or ""
-                                ok, _ = detectXSS(src, self.token, self.token)
+                                ok, _ = detectXSS(src, self.token)
                                 if not ok:
                                     continue
 
@@ -306,6 +305,11 @@ class DomXSSFuzzer(AbstractFuzzer):
                         )
                         if pageRep is not None:
                             pageRep.add(pageKey)
+                        if self.bailEvent:
+                            try:
+                                self.bailEvent.set()
+                            except:
+                                pass
                     else:
                         find = findings[resultsKey]
                         find.count = (find.count or 0) + 1

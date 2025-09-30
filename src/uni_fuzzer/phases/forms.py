@@ -135,7 +135,7 @@ class FormsPhase (FuzzerPhase):
                 status(f"[Thread] SQLi Blind Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
                 sqli_blind_fuzzer = SQLiFuzzer(
-                    baseUrl=args.fullUrl,
+                    baseUrl=fullUrl,
                     useCrawler=False,
                     wordlistPath=self.wordlistSqli,
                     session=sess,

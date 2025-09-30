@@ -28,7 +28,6 @@ class FormXSSFuzzer(AbstractFuzzer):
 
         self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.token = token or f"XSSCanary-{uuid4().hex[:8]}"
-        self.tokenLow = self.token.lower()
         self.tokenB = self.token.encode("utf-8", errors="ignore")
 
         self.auth = auth
@@ -39,7 +38,10 @@ class FormXSSFuzzer(AbstractFuzzer):
         self.prepared = False
         self.prebuiltPayloads = []
 
-        if self.auth:
+        p = urlparse(self.baseUrl)
+        self.origin = f"{p.scheme}://{p.netloc}"
+
+        if self.auth and self.loginUsername and self.loginPassword:
             # Use the generic HTTP login in auth.py
             ok = login(
                 self.session,
@@ -113,9 +115,8 @@ class FormXSSFuzzer(AbstractFuzzer):
                 continue
 
             # Normalize Url
-            parsed = urlparse(self.baseUrl)
             if not url.startswith("http"):
-                url = f"{parsed.scheme}://{parsed.netloc}{url}"
+                url = f"{self.origin}{url}"
 
             fuzzField = [f for f in fields if isFuzzableField(f)]
 
@@ -176,7 +177,7 @@ class FormXSSFuzzer(AbstractFuzzer):
                     for f in fuzzField:
                         params[f] = enc
 
-                    logParams = [f"{k}={quote(str(v), safe='')}" for k, v in params.items()]
+                    logParams = [f"{k}={v}" for k, v in params.items()]
                     fullUrl = f"{url}{separator}{'&'.join(logParams)}"
 
                     meta = {
@@ -204,7 +205,7 @@ class FormXSSFuzzer(AbstractFuzzer):
         # Skip non-HTML, xml and javascript
         ctype = (response.headers.get("Content-Type") or "").lower()
 
-        if ctype and ("html" not in ctype and "xml" not in ctype and "javascript" not in ctype):
+        if ctype and all(t not in ctype for t in ("html", "xml", "javascript", "svg")):
             return None
 
         # If token bytes not present skip
@@ -215,17 +216,17 @@ class FormXSSFuzzer(AbstractFuzzer):
         enc = response.encoding or "utf-8"
         body = content.decode(enc, errors="ignore")
         low = body.lower()
+        lowU = unescape(body).lower()
+        lowQ = unquote_plus(body).lower()
 
         # Detect XSS with detect function
         marked = (meta or {}).get("marked")
         if marked:
             mlow = marked.lower()
-            if (mlow not in low
-                    and unescape(body).lower().find(mlow) == -1
-                    and unquote_plus(body).lower().find(mlow) == -1):
+            if mlow not in low and mlow not in lowU and mlow not in lowQ:
                 return None
 
-        ok, indicator = detectXSS(body, self.token, marked)
+        ok, indicator = detectXSS(body, self.token)
 
         if not ok:
             return None

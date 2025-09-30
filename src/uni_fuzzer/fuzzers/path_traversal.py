@@ -1,6 +1,6 @@
 import threading
 import logging
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 from pathlib import PurePosixPath
 
 from uni_fuzzer.core.base_fuzzer import AbstractFuzzer
@@ -13,7 +13,10 @@ cfg = get_cfg()
 
 log = logging.getLogger(__name__)
 
-class PathFuzzer(AbstractFuzzer):
+class TraversalPathFuzzer(AbstractFuzzer):
+    """
+        Fuzz the URL path using the payload
+    """
 
     def __init__(self, baseUrl, wordlistPath=None, maxDepth=None, loginUsername=None, loginPassword=None,loginPath=None, session=None, auth=None, bailEvent=None):
 
@@ -21,10 +24,10 @@ class PathFuzzer(AbstractFuzzer):
 
         self.maxDepth =  maxDepth if maxDepth is not None else self.cfg["fuzz"]["max_depth_default"]
         self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
+        self.auth = auth
         self.loginUsername = loginUsername
         self.loginPassword = loginPassword
         self.loginPath = loginPath
-        self.auth = auth
 
         # results storage
         self.visitedPaths = set()
@@ -43,18 +46,28 @@ class PathFuzzer(AbstractFuzzer):
         if self.auth and self.loginUsername and self.loginPassword:
             ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
             if not ok :
-                status("[!] HTTP login in PathFuzzer failed")
-                log.warning("HTTP login in PathFuzzer failed")
+                status("[!] HTTP login in TraversalPathFuzzer  failed")
+                log.warning("HTTP login in TraversalPathFuzzer  failed")
 
         self.baseline = None
 
     def prepare(self, ctx):
-        self.baseline = getBaseline(self.session, self.baseUrl, self.headers)
+        if self.baseline is None:
+            self.baseline = getBaseline(self.session, self.baseUrl, self.headers)
 
-    def  fuzzPath(self, path, currDepth= 0):
+    def  run(self, ctx=None, path=None, currDepth=0):
         """
             Fuzz the URL path using the payload
         """
+
+        if path is None:
+            p = urlparse(self.baseUrl).path
+            path = p if p else "/"
+            currDepth = 0
+
+        if self.baseline is None:
+            self.prepare(None)
+
         segments = path.strip("/").split("/")
         # Shorten the path if it ends with one of the self.excludedExtensions
         for i, segment in enumerate(segments):
@@ -68,15 +81,15 @@ class PathFuzzer(AbstractFuzzer):
 
         with self.lock:
             if normalizedPath in self.visitedFuzzPaths:
-                return
+                return []
             self.visitedFuzzPaths.add(normalizedPath)
 
         # If bail on first then bail
         if self.bailEvent and self.bailEvent.is_set():
-            return
+            return []
 
         if currDepth > self.maxDepth:
-            return
+            return []
 
         parsed = urlparse(self.baseUrl)
         base = f"{parsed.scheme}://{parsed.netloc}"
@@ -102,9 +115,9 @@ class PathFuzzer(AbstractFuzzer):
             meta = {"payload": payload, "depth": currDepth, "kind": "path"}
             batch.append(("GET", targetUrl, {"headers": self.headers}, meta))
 
-        self.prepare(None) if self.baseline is None else None
         # Execute via base helper
         findings = self.runBatch(batch, concurrency=self.cfg["concurrency"]["max_workers"])
+        results = list(findings)
 
         # Pick up interesting_200 and recurse
         interestingResults = []
@@ -115,7 +128,7 @@ class PathFuzzer(AbstractFuzzer):
                 interestingResults.append((parse.path or "/", (currDepth + 1)))
 
         if self.bailEvent and self.bailEvent.is_set():
-            return
+            return results
 
         for (interestingPath, nextDepth) in interestingResults:
             normalized = PurePosixPath(interestingPath).as_posix().rstrip("/") or "/"
@@ -125,7 +138,11 @@ class PathFuzzer(AbstractFuzzer):
                     continue
 
                 self.visitedFuzzPaths.add(normalized)
-            self.fuzzPath(interestingPath, nextDepth)
+            child = self.run(None, interestingPath, nextDepth)
+            if child:
+                results.extend(child)
+
+        return results
 
 
     def analyzeResponse(self, response, meta):
@@ -140,8 +157,6 @@ class PathFuzzer(AbstractFuzzer):
         # Skip if too similar
         if resultType == "skip_similar":
             return None
-
-        params = ("?" in (response.url or "")) or (meta.get("kind") == "params")
 
         # If an interesting_200 then add to results and recurse
         if resultType == "interesting_200":
@@ -175,7 +190,7 @@ class PathFuzzer(AbstractFuzzer):
         # If vulnerability hit add to results
         if resultType == "vulnerable":
             # First timer
-            resType = "param" if params else "path"
+            resType = "path"
             res = Finding(
                 type=resType,
                 url=response.url,
@@ -190,40 +205,3 @@ class PathFuzzer(AbstractFuzzer):
             return res
 
         return None
-
-    def fuzzParams(self):
-        """
-            Fuzz query params
-        """
-        parsed = urlparse(self.baseUrl)
-
-        if "FUZZ" not in parsed.query:
-            status("[-] No 'FUZZ' keyword found")
-            return []
-
-        baseNoQuery = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        originalQuery = parsed.query
-
-        batch = []
-
-        for raw in self.payloads:
-            if self.bailEvent and self.bailEvent.is_set():
-                break
-            enc = quote(raw, safe="")
-            # Replace FUZZ with the payload
-            fuzzedQuery = originalQuery.replace("FUZZ", enc)
-
-            fullUrl = f"{baseNoQuery}?{fuzzedQuery}"
-
-            meta = {"payload": raw, "kind": "params"}
-            batch.append(("GET", fullUrl, {"headers": self.headers}, meta))
-
-        if self.baseline is None:
-            self.prepare(None)
-
-        # Execute via base helper
-        findings = self.runBatch(batch, concurrency=self.cfg["concurrency"]["max_workers"])
-        # Return only confirmed param vulns
-        return [f for f in findings if getattr(f, "type", "") == "param"]
-
-

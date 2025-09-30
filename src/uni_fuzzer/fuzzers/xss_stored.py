@@ -29,7 +29,6 @@ class StoredXSSFuzzer(AbstractFuzzer):
         self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.token = token or f"XSSCanary-{uuid4().hex[:8]}"
         self.tokenLow = self.token.lower()
-        self.tokenB = self.token.encode("utf-8", errors="ignore")
 
         self.auth = auth
         self.loginUsername = loginUsername
@@ -40,7 +39,7 @@ class StoredXSSFuzzer(AbstractFuzzer):
         self.prebuiltPayloads = []
         self.reported = set()
 
-        if self.auth:
+        if self.auth and self.loginUsername and self.loginPassword:
             # Use the generic HTTP login in auth.py
             ok = login(
                 self.session,
@@ -84,9 +83,8 @@ class StoredXSSFuzzer(AbstractFuzzer):
         """
             Build batch and execute via runBatch
         """
-
+        self.reported.clear()
         pages = []
-        reported = set()
 
         if isinstance(ctx, dict):
             forms = ctx.get("forms")
@@ -230,6 +228,7 @@ class StoredXSSFuzzer(AbstractFuzzer):
         revisitHeaders["Pragma"] = "no-cache"
         revisitHeaders["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
+        pages = list(dict.fromkeys(pages))
         batchR = []
         for page in pages:
             meta = {
@@ -242,7 +241,6 @@ class StoredXSSFuzzer(AbstractFuzzer):
         if not batchR:
             return []
 
-        self.reported = reported
         findings = self.runBatch(batchR, concurrency=self.cfg["concurrency"]["max_workers"])
         return findings
 
@@ -256,22 +254,22 @@ class StoredXSSFuzzer(AbstractFuzzer):
             return None
 
         ctype = (response.headers.get("Content-Type") or "").lower()
-        if ctype and ("html" not in ctype and "xml" not in ctype and "javascript" not in ctype):
+        if ctype and all(t not in ctype for t in ("html", "xml", "javascript", "svg")):
             return None
 
         body = response.text or ""
         low = body.lower()
+        lowU = unescape(body).lower()
+        lowQ = unquote_plus(body).lower()
 
         # If no token quick detect pass
-        if (self.tokenLow not in low) and (unescape(body).lower().find(self.tokenLow) == -1) and (unquote_plus(body).lower().find(self.tokenLow) == -1):
-            ok, _ = detectXSS(body, self.token, self.token)
-            if not ok:
-                return None
+        if self.tokenLow not in low and self.tokenLow not in lowU and self.tokenLow not in lowQ:
+            return None
 
         finUrl = getattr(response, "url", "") or ""
         base = finUrl.split("?", 1)[0].split("#", 1)[0]
-        # Check if payloads still persists
 
+        # Check if payloads still persists
         try:
             p = urlparse(base)
             scheme = (p.scheme or "").lower()
@@ -285,23 +283,35 @@ class StoredXSSFuzzer(AbstractFuzzer):
         except Exception:
             pageKey = (base.rstrip("/")).lower()
 
-        for raw, marked, enc in self.prebuiltPayloads:
-            ok, indicator = detectXSS(body, self.token, marked)
-            if not ok:
-                continue
-            # Check if reported before
-            key = (pageKey, (indicator or "N/A"), marked)
-            if key in self.reported:
-                continue
-            self.reported.add(key)
+        ok, indicator = detectXSS(body, self.token)
+        if not ok:
+            return None
+        indicator = indicator or "N/A"
 
-            return Finding(
-                type="xss_stored",
-                url=pageKey,
-                method="GET",
-                payload=raw,
-                indicator=(indicator or "N/A"),
-                status_code=response.status_code,
-                response_snippet=body[:200]
-            )
-        return None
+        chosen = None
+        for rawSamp, markedSamp, _ in self.prebuiltPayloads:
+            mlow = markedSamp.lower()
+            if mlow in low or mlow in lowU or mlow in lowQ:
+                chosen = (rawSamp, markedSamp)
+                break
+
+        if chosen is None:
+            rawRep, markedRep = (None, self.token)
+        else:
+            rawRep, markedRep = chosen
+
+        # Check if reported before
+        key = (pageKey, (indicator or "N/A"), markedRep)
+        if key in self.reported:
+            return None
+        self.reported.add(key)
+
+        return Finding(
+            type="xss_stored",
+            url=pageKey,
+            method="GET",
+            payload=rawRep,
+            indicator=(indicator or "N/A"),
+            status_code=response.status_code,
+            response_snippet=body[:200]
+        )

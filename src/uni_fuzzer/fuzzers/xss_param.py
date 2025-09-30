@@ -1,6 +1,6 @@
 import logging
 
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse, quote, unquote_plus
 from uuid import uuid4
 from html import unescape
 
@@ -26,7 +26,6 @@ class ParamXSSFuzzer(AbstractFuzzer):
 
         self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.token = token or f"XSSCanary-{uuid4().hex[:8]}"
-        self.tokenLow = self.token.lower()
         self.tokenB = self.token.encode("utf-8", errors="ignore")
 
         self.auth = auth
@@ -40,7 +39,7 @@ class ParamXSSFuzzer(AbstractFuzzer):
         self.originalQuery = None
         self.prebuiltPayloads = []
 
-        if self.auth:
+        if self.auth and self.loginUsername and self.loginPassword:
             # Use the generic HTTP login in auth.py
             ok = login(
                 self.session,
@@ -89,6 +88,7 @@ class ParamXSSFuzzer(AbstractFuzzer):
         probe = f"xssprobe-{self.token}"
         probeQuery = self.originalQuery.replace("FUZZ", quote(probe, safe=""))
         probeUrl = f"{self.baseNoQuery}?{probeQuery}"
+        plow = probe.lower()
 
         try:
             res = self.session.get(
@@ -99,10 +99,9 @@ class ParamXSSFuzzer(AbstractFuzzer):
             )
             body = res.text or ""
             bodyLow = body.lower()
-            if (probe.lower() not in bodyLow) and (unescape(body).lower().find(probe.lower()) == -1):
+            if (plow not in bodyLow) and (unescape(body).lower().find(plow) == -1):
                 log.debug("Probe not reflected for %s", probeUrl)
                 self.reflective = False
-                self.ready = True
                 return
             self.reflective = True
             self.ready = True
@@ -113,7 +112,7 @@ class ParamXSSFuzzer(AbstractFuzzer):
             self.ready = True
 
 
-    def run(self):
+    def run(self, ctx=None):
         """
             Build batch and execute via runBatch
         """
@@ -155,7 +154,6 @@ class ParamXSSFuzzer(AbstractFuzzer):
 
         # Skip non-HTML, xml and javascript
         ctype = (response.headers.get("Content-Type") or "").lower()
-
         if ctype and ("html" not in ctype and "xml" not in ctype and "javascript" not in ctype):
             return None
 
@@ -165,11 +163,22 @@ class ParamXSSFuzzer(AbstractFuzzer):
             return None
 
         enc = response.encoding or "utf-8"
-        body = content.decode(enc, errors="ignore")
 
         # Detect XSS with detect function
         marked = (meta or {}).get("marked")
-        ok, indicator = detectXSS(body, self.token, marked)
+
+        # makes sure that the exact marked payload is reflected
+        body = content.decode(enc, errors="ignore")
+        low = body.lower()
+        lowU = unescape(body).lower()
+        lowQ = unquote_plus(body).lower()
+
+        if marked:
+            mlow = marked.lower()
+            if mlow not in low and mlow not in lowU and mlow not in lowQ:
+                return None
+
+        ok, indicator = detectXSS(body, self.token)
 
         if not ok:
             return None

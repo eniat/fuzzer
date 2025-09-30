@@ -8,7 +8,8 @@ from uni_fuzzer.phases.forms import FormsPhase
 from uni_fuzzer.phases.dom import DomXSSPhase
 from uni_fuzzer.core.logging_setup import setupLogging
 from uni_fuzzer.crawler.crawler import Crawler
-from uni_fuzzer.fuzzers.path import PathFuzzer
+from uni_fuzzer.fuzzers.path_traversal import TraversalPathFuzzer
+from uni_fuzzer.fuzzers.path_param import ParamPathFuzzer
 from uni_fuzzer.llm.semantic_llm import filterML
 from uni_fuzzer.fuzzers.xss_param import ParamXSSFuzzer
 from uni_fuzzer.core.reporting import crawlerPrint, fuzzerPrint, crawlerJson, fuzzerJson
@@ -271,10 +272,12 @@ def run(args):
         fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
         if args.output_to_json:
             fuzzerJson(allVulnerabilities, output_to_json=True)
+        return
 
-    else:
+    results = []
 
-        fuzzer = PathFuzzer(
+    if args.fuzz_paths:
+        fuzzer = TraversalPathFuzzer(
             baseUrl=args.start_url,
             wordlistPath=wordlistPathsParams,
             session=None,
@@ -284,23 +287,29 @@ def run(args):
             auth=args.auth,
         )
 
-        if args.fuzz_paths:
-            for p in getParents(urlparse(args.start_url).path):
-                fuzzer.fuzzPath(p)
-
-        results = []
-
-        if args.fuzz_params:
-            results.extend(fuzzer.fuzzParams())
-
-        results.extend(list(fuzzer.vulnerablePaths.values()))
+        for p in getParents(urlparse(args.start_url).path):
+            res = fuzzer.run(path=p) or []
+            results.extend(res)
 
         if args.report_all and getattr(fuzzer, "interesting200", None):
             results.extend(fuzzer.interesting200)
         if args.report_all and getattr(fuzzer, "interesting", None):
             results.extend(fuzzer.interesting)
 
-        allVulnerabilities = collapseDuplicates(results)
-        fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
-        if args.output_to_json:
-            fuzzerJson(allVulnerabilities, output_to_json=True)
+    if args.fuzz_params:
+        fuzzer = ParamPathFuzzer(
+            baseUrl=args.start_url,
+            wordlistPath=wordlistPathsParams,
+            session=None,
+            auth=args.auth,
+            loginUsername=args.username,
+            loginPassword=args.password,
+            loginPath=args.login_path,
+        )
+        res = fuzzer.run() or []
+        results.extend(res)
+
+    allVulnerabilities = collapseDuplicates(results)
+    fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
+    if args.output_to_json:
+        fuzzerJson(allVulnerabilities, output_to_json=True)
