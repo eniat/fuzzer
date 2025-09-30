@@ -29,8 +29,11 @@ class DomXSSFuzzer(AbstractFuzzer):
             self.headers["Referer"] = self.baseUrl
 
         self.prePayloads = list(self.cfg["xss"]["dom_payloads"] or [])
+        self.payloads = []
         self.token = token or f"XSSCanary-{uuid4().hex[:8]}"
         self.tokenLow = self.token.lower()
+
+        self.candidates = []
 
         self.auth = auth
         self.loginUsername = loginUsername
@@ -38,8 +41,6 @@ class DomXSSFuzzer(AbstractFuzzer):
         self.loginPath = loginPath
 
         self.headless = headless
-        self.prepared = False
-        self.payloads = []
 
         if self.auth and self.loginUsername and self.loginPassword:
             # Use the generic HTTP login in auth.py
@@ -59,23 +60,20 @@ class DomXSSFuzzer(AbstractFuzzer):
 
     def prepare(self, ctx):
         """
-            Build payloads
+            Build payloads and candidates
         """
-        if self.prepared:
-            return
+        self.payloads = []
+
         seen = set()
         for raw in (self.prePayloads or []):
             if raw in seen:
                 continue
             seen.add(raw)
             self.payloads.append(raw.replace("{CANARY}", self.token))
-        self.prepared = True
 
-
-    def run(self, ctx):
-        """
-            Build batch and execute via runBatch
-        """
+        if ctx is None:
+            self.candidates = []
+            return
 
         if isinstance(ctx, dict):
             forms = ctx.get("forms")
@@ -84,20 +82,17 @@ class DomXSSFuzzer(AbstractFuzzer):
             forms = getattr(ctx, "forms", None)
             endpoints = getattr(ctx, "endpoints", None)
 
-        if not self.prepared:
-            self.prepare(None)
-
         parsed = urlparse(self.baseUrl)
         origin = f"{parsed.scheme}://{parsed.netloc}"
 
         # Build candidates
-        candidates = []
+        cand = []
 
         for form in (forms or []):
             # Build URLs from forms
             url = form.get("url")
             method = (form.get("method") or "GET").upper()
-            fields = form.get("formFields") or[]
+            fields = form.get("formFields") or []
 
             # Only fuzz get forms with fields
             if not url or method != "GET" or not fields:
@@ -106,41 +101,53 @@ class DomXSSFuzzer(AbstractFuzzer):
                 url = f"{origin}{url}"
 
             # Try all DOM specific payloads
-            for marked in (self.payloads or []):
+            for raw in (self.prePayloads or []):
+                marked = raw.replace("{CANARY}", self.token)
                 parts = [f"{field}={quote(marked, safe='')}" for field in fields]
                 separator = "&" if "?" in url else "?"
-                candidates.append((f"{url}{separator}{'&'.join(parts)}",marked))
-                candidates.append((f"{url}#{quote(marked, safe='')}",marked))
+                cand.append((f"{url}{separator}{'&'.join(parts)}", raw, marked))
+                cand.append((f"{url}#{quote(marked, safe='')}", raw, marked))
 
         for ep in (endpoints or []):
             # Build URLs from endpoints
-            if isinstance(ep, str):
-                fullUrl = ep if ep.startswith("http") else f"{origin}{ep}"
-                for marked in (self.payloads or []):
-                    candidates.append((f"{fullUrl}#{quote(marked, safe='')}",marked))
+            if not isinstance(ep, dict):
                 continue
 
-            rawUrl = ep.get("url") if isinstance(ep, dict) else None
-            params = (ep.get("params") or []) if isinstance(ep, dict) else None
+            rawUrl = ep.get("url")
+            params = list(ep.get("params") or [])
 
-            if not rawUrl:
+            if not rawUrl or not params:
                 continue
 
             # Normalize URLs
             fullUrl = rawUrl if rawUrl.startswith("http") else f"{origin}{rawUrl}"
 
-            if params:
-                for marked in (self.payloads or []):
-                    parts = [f"{p}={quote(marked, safe='')}" for p in params]
-                    sep = "&" if "?" in fullUrl else "?"
-                    candidates.append((f"{fullUrl}{sep}{'&'.join(parts)}",marked))
-                    candidates.append((f"{fullUrl}#{quote(marked, safe='')}",marked))
+            for raw in (self.prePayloads or []):
+                marked = raw.replace("{CANARY}", self.token)
+                parts = [f"{p}={quote(marked, safe='')}" for p in params]
+                sep = "&" if "?" in fullUrl else "?"
+                cand.append((f"{fullUrl}{sep}{'&'.join(parts)}", raw, marked))
+                cand.append((f"{fullUrl}#{quote(marked, safe='')}", raw, marked))
 
-            else:
-                for marked in (self.payloads or []):
-                    candidates.append((f"{fullUrl}#{quote(marked, safe='')}",marked))
+        dedup = {}
+        for (u, raw, marked) in cand:
+            pageKey = u.split("?", 1)[0].split("#", 1)[0]
+            dedup.setdefault((pageKey, raw), (u, raw, marked))
+        self.candidates = list(dedup.values())
 
-        candidates = list({(u, m) for (u, m) in candidates})
+
+    def run(self, ctx):
+        """
+            Build batch and execute via runBatch
+        """
+        self.prepare(ctx)
+
+        parsed = urlparse(self.baseUrl)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+
+        candidates = self.candidates or []
+        if not candidates:
+            return []
 
         # Configure the selenium webdriver
         options = Options()
@@ -221,7 +228,7 @@ class DomXSSFuzzer(AbstractFuzzer):
                 except Exception:
                     log.debug("Copying cookies from driver back to session failed", exc_info=True)
 
-            for finUrl, marked in candidates:
+            for finUrl, raw, marked in candidates:
                 # If bail on first then bail
                 if self.bailEvent and self.bailEvent.is_set():
                     break
@@ -231,10 +238,10 @@ class DomXSSFuzzer(AbstractFuzzer):
                 if pageRep is not None and pageKey in pageRep:
                     continue
 
-                if (pageKey, marked) in seen:
+                if (pageKey, raw) in seen:
                     # Skip already tested pages
                     continue
-                seen.add((pageKey, marked))
+                seen.add((pageKey, raw))
 
                 try:
                     driver.get(finUrl)
@@ -260,34 +267,11 @@ class DomXSSFuzzer(AbstractFuzzer):
                         if not ok:
                             indicator = None
 
-                    # try retrigger hash based then add indicators
                     if not indicator:
-                        try:
-                            driver.execute_script("location.hash = arguments[0];", "#" + quote(marked, safe=""))
-                            time.sleep(self.cfg["xss"]["dom_delay_seconds"])
-                            flag2 = probeDom(driver, self.tokenLow)
-                            if flag2.get("gflag"):
-                                indicator = "dom_global_flag_hash"
-                            elif flag2.get("el"):
-                                indicator = "dom_element_ctx_hash"
-                            elif flag2.get("ls") or flag2.get("ss"):
-                                indicator = "dom_storage_hash"
-
-                            # To resolve false positives for dom_storage
-                            if indicator == "dom_storage_hash":
-                                src = driver.page_source or ""
-                                ok, _ = detectXSS(src, self.token)
-                                if not ok:
-                                    continue
-
-                        except Exception:
-                            log.debug("Hash re-trigger attempt failed", exc_info=True)
-
-                        if not indicator:
-                            continue
+                        continue
 
                     # record result
-                    resultsKey = (pageKey, (indicator or "N/A"))
+                    resultsKey = (pageKey, indicator)
 
                     if resultsKey not in findings:
 
@@ -296,11 +280,11 @@ class DomXSSFuzzer(AbstractFuzzer):
                             url=pageKey,
                             method="GET",
                             param=None,
-                            payload=marked,
-                            indicator=indicator or "N/A",
+                            payload=raw,
+                            indicator=indicator,
                             status_code=200,
                             count=1,
-                            payload_samples=[marked],
+                            payload_samples=[raw],
                             response_snippet=(driver.page_source or "")[:200]
                         )
                         if pageRep is not None:
@@ -313,9 +297,9 @@ class DomXSSFuzzer(AbstractFuzzer):
                     else:
                         find = findings[resultsKey]
                         find.count = (find.count or 0) + 1
-                        if marked not in (find.payload_samples or []):
+                        if raw not in (find.payload_samples or []):
                             if len(find.payload_samples or []) < self.cfg["xss"]["max_samples_per_group"]:
-                                find.payload_samples.append(marked)
+                                find.payload_samples.append(raw)
 
                 except Exception:
                     log.debug("DOM candidate failed for %s", finUrl, exc_info=True)
