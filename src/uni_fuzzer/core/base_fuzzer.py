@@ -125,8 +125,8 @@ class AbstractFuzzer (ABC):
 
                 if finding:
                     findings.append(finding)
-
-                    if self.bailEvent:
+                    bail = getattr(finding, "bail", False)
+                    if self.bailEvent and bail:
                         self.bailEvent.set()
                         break
         return findings

@@ -2,7 +2,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 import logging
 
-from uni_fuzzer.core.fuzzer import PhaseContext
+from uni_fuzzer.core.fuzzer_phases import PhaseContext
 from uni_fuzzer.phases.endpoints import EndpointsPhase
 from uni_fuzzer.phases.forms import FormsPhase
 from uni_fuzzer.phases.dom import DomXSSPhase

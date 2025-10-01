@@ -305,8 +305,7 @@ class StoredXSSFuzzer(AbstractFuzzer):
         if key in self.reported:
             return None
         self.reported.add(key)
-
-        return Finding(
+        finding =  Finding(
             type="xss_stored",
             url=pageKey,
             method="GET",
@@ -315,3 +314,5 @@ class StoredXSSFuzzer(AbstractFuzzer):
             status_code=response.status_code,
             response_snippet=body[:200]
         )
+        setattr(finding, "bail", True)
+        return finding

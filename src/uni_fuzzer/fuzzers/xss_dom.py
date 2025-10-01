@@ -164,38 +164,40 @@ class DomXSSFuzzer(AbstractFuzzer):
         seen = set()
         pageRep = set() if self.bailEvent is not None else None
 
-        driver = webdriver.Chrome(options=options)
+        driver = None
         try:
+            driver = webdriver.Chrome(options=options)
             try:
                 # Extra to match cookies from initial session
                 driver.get(origin)
 
-                for c in self.session.cookies:
-                    name = getattr(c, "name", None)
-                    value = getattr(c, "value", None)
-                    if not name or not value:
-                        continue
+                if getattr(self, "session", None):
+                    for c in self.session.cookies:
+                        name = getattr(c, "name", None)
+                        value = getattr(c, "value", None)
+                        if not name or not value:
+                            continue
 
-                    domain = (getattr(c, "domain", "") or "").lstrip(".")
-                    path = getattr(c, "path", "/") or "/"
+                        domain = (getattr(c, "domain", "") or "").lstrip(".")
+                        path = getattr(c, "path", "/") or "/"
 
-                    # only push cookies that match the current origin
-                    if domain and not parsed.netloc.endswith(domain):
-                        continue
+                        # only push cookies that match the current origin
+                        if domain and not parsed.netloc.endswith(domain):
+                            continue
 
-                    ck = {"name": name, "value": value, "path": path, "domain": domain}
-                    exp = getattr(c, "expires", None)
+                        ck = {"name": name, "value": value, "path": path, "domain": domain}
+                        exp = getattr(c, "expires", None)
 
-                    if exp is not None:
+                        if exp is not None:
+                            try:
+                                ck["expiry"] = int(exp)
+                            except Exception:
+                                log.debug("Cookie expiry conversion failed ", exc_info=True)
+
                         try:
-                            ck["expiry"] = int(exp)
+                            driver.add_cookie(ck)
                         except Exception:
-                            log.debug("Cookie expiry conversion failed ", exc_info=True)
-
-                    try:
-                        driver.add_cookie(ck)
-                    except Exception:
-                        log.debug("driver.add_cookie failed: %s", ck, exc_info=True)
+                            log.debug("driver.add_cookie failed: %s", ck, exc_info=True)
             except Exception:
                 log.debug("Preloading origin & cookie copy failed", exc_info=True)
 
@@ -224,9 +226,13 @@ class DomXSSFuzzer(AbstractFuzzer):
                         if name and value:
                             jar.set(name=name, value=value, domain=domain, path=path)
 
-                    self.session.cookies.update(jar)
+                    if getattr(self, "session", None):
+                        try:
+                            self.session.cookies.update(jar)
+                        except Exception:
+                            log.debug("Copying cookies from driver back to session failed during updating", exc_info=True)
                 except Exception:
-                    log.debug("Copying cookies from driver back to session failed", exc_info=True)
+                    log.debug("Copying cookies from driver back to session failed during collection", exc_info=True)
 
             for finUrl, raw, marked in candidates:
                 # If bail on first then bail
@@ -287,6 +293,7 @@ class DomXSSFuzzer(AbstractFuzzer):
                             payload_samples=[raw],
                             response_snippet=(driver.page_source or "")[:200]
                         )
+                        setattr(findings[resultsKey], "bail", True)
                         if pageRep is not None:
                             pageRep.add(pageKey)
                         if self.bailEvent:
@@ -305,10 +312,11 @@ class DomXSSFuzzer(AbstractFuzzer):
                     log.debug("DOM candidate failed for %s", finUrl, exc_info=True)
                     continue
         finally:
-            try:
-                driver.quit()
-            except Exception:
-                log.debug("driver.quit() failed", exc_info=True)
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    log.debug("driver.quit() failed", exc_info=True)
 
         return list(findings.values())
 

@@ -168,6 +168,7 @@ class TraversalPathFuzzer(AbstractFuzzer):
                 status_code=statusC,
                 response_snippet=(response.text or "")[:200]
             )
+            setattr(result, "bail", False)
             with self.lock:
                 self.interesting200.append(result)
 
@@ -183,6 +184,7 @@ class TraversalPathFuzzer(AbstractFuzzer):
                 status_code=statusC,
                 indicator=indicator
             )
+            setattr(res, "bail", False)
             with self.lock:
                 self.interesting.append(res)
             return res
@@ -199,6 +201,7 @@ class TraversalPathFuzzer(AbstractFuzzer):
                 status_code=statusC,
                 indicator=indicator
             )
+            setattr(res, "bail", True)
             with self.lock:
                 key = (response.url.split("?", 1)[0], indicator, resType)
                 self.vulnerablePaths[key] = res

@@ -193,15 +193,6 @@ paths:
     - "install.php"
     - ".git"
     - ".git/config"
-  collapsible_types:
-    - "path"
-    - "param"
-    - "interesting"
-    - "interesting 200"
-    - "interesting_200"
-    - "xss_form"
-    - "xss_param"
-    - "xss_dom"
   auto_submit_keys:
     - "submit"
     - "btn"

@@ -233,7 +233,7 @@ class FormXSSFuzzer(AbstractFuzzer):
 
         payload = (meta or {}).get("payload")
         method = (meta or {}).get("method")
-        return Finding(
+        finding = Finding(
             type="xss_form",
             url=response.url,
             method=method,
@@ -242,3 +242,5 @@ class FormXSSFuzzer(AbstractFuzzer):
             status_code=response.status_code,
             response_snippet=body[:200],
         )
+        setattr(finding, "bail", True)
+        return finding

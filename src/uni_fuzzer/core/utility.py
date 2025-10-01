@@ -56,241 +56,140 @@ def collapseDuplicates (items: list[Finding]) -> list[Finding]:
         Collapses duplicates that go into the same normalised path
     """
     groups = {}
-    storedGroups = {}
-    xssGroups = {}
     emitted: list[Finding] = []
 
     cfg = get_cfg()
 
     # List of vuln files
     SENSITIVE_FILES = cfg["paths"]["sensitive_files"]
-    FILE_EXTENSIONS = cfg["paths"]["file_extensions"]
-    COLLAPSIBLE_TYPES = cfg["paths"]["collapsible_types"]
+    FILE_EXTENSIONS = tuple(cfg["paths"]["file_extensions"] or ())
     XSS_MAX_SAMPLES = cfg["xss"]["max_samples_per_group"]
     PATH_MAX_SAMPLES = cfg["path_traversal"]["max_samples_per_group"]
+    SQLI_MAX_SAMPLES =cfg["sqli"]["max_samples_per_group"]
 
-    for item in items or []:
-        rawUrl = (item.url or "").strip()
-        typ = (item.type or "").lower()
+    for item in (items or []):
+        rawUrl = (getattr(item, "url", "") or "").strip()
 
         if not rawUrl:
             continue
 
-        # Purely collapse XSS_stored as each thread checks all endpoints
-        if typ == "xss_stored":
-            p = urlparse(rawUrl)
-            scheme = (p.scheme or "").lower()
-            host = (p.netloc or "").lower()
-            path = p.path or "/"
+        typ = (getattr(item, "type", "") or "").lower()
+        indicator = (getattr(item, "indicator", "") or "N/A").strip()
+        param = getattr(item, "param", None)
 
-            # Normalise ands strip
+        try:
+            # Consistent normalization
+            parsed = urlparse(rawUrl)
+            scheme = (parsed.scheme or "").lower()
+            host = (parsed.netloc or "").lower()
+            path = unquote(parsed.path or "/")
+            path = posixpath.normpath(path)
+
+            if not path.startswith("/"):
+                path = "/" + path
+
             if path != "/" and path.endswith("/"):
                 path = path.rstrip("/")
+        except Exception:
 
-            pageUrl = f"{scheme}://{host}{path}"
-            indicator = (item.indicator or "N/A")
+            scheme, host, path = "", "", (rawUrl or "/")
 
-            skey = (typ, host, path, indicator)
+        # Work out a group path
+        try:
+            baseC = (path.rsplit("/", 1)[-1] if path else "").lower()
+            queryL = (parsed.query or "").lower()
 
-            count = int(item.count or 0)
-            samples = list(item.payload_samples or [])
+            files = (baseC.endswith(FILE_EXTENSIONS) or baseC in SENSITIVE_FILES)
+            query = None
 
-            if not samples and item.payload is not None:
-                samples = [item.payload]
+            if not files and queryL:
+                for name in SENSITIVE_FILES:
+                    if name in queryL:
+                        query = name
+                        break
 
-            if skey not in storedGroups:
-                rep = Finding(
-                    type=typ,
-                    url=pageUrl,
-                    method=item.method or "GET",
-                    param=item.param,
-                    payload=item.payload,
-                    indicator=indicator,
-                    status_code=item.status_code,
-                    count=0,
-                    payload_samples=[],
-                    response_snippet=(item.response_snippet or "")[:200]
-                )
-                rep.count = (rep.count or 0) + (count or 1)
-                for sample in samples:
-                    if sample is not None and len(rep.payload_samples) < XSS_MAX_SAMPLES:
-                        if sample not in rep.payload_samples:
-                            rep.payload_samples.append(sample)
-
-                storedGroups[skey] = rep
-                emitted.append(rep)
-
+            # As more variants for path/param due to payload similarity tighter group
+            if ("path" in typ) or ("param" in typ):
+                if files:
+                    groupPath = "/" + baseC
+                elif query:
+                    groupPath = "/" + query
+                else:
+                    groupPath = path
             else:
-                rep = storedGroups[skey]
+                groupPath = path
+        except Exception:
+            groupPath = path
 
-                rep.count = (rep.count or 0) + (count or 1)
+        pageUrl = f"{scheme}://{host}{groupPath}"
 
-                for sample in samples:
-                    if sample is not None and len(rep.payload_samples) < XSS_MAX_SAMPLES:
-                        if sample not in rep.payload_samples:
-                            rep.payload_samples.append(sample)
-
-                try:
-                    if int(item.status_code or 0) > int(rep.status_code or 0):
-                        rep.status_code = item.status_code
-                except Exception:
-                    log.debug("Failed to update status_code in stored XSS group", exc_info=True)
-
-            continue
-
-        # Collapse the other xss
-        if typ in ("xss_form", "xss_param", "xss_dom"):
-            p = urlparse(rawUrl)
-            scheme = (p.scheme or "").lower()
-            host = (p.netloc or "").lower()
-            path = p.path or "/"
-
-            # Normalize path
-            if path != "/" and path.endswith("/"):
-                path = path.rstrip("/")
-
-            pageUrl = f"{scheme}://{host}{path}"
-            indicator = (item.indicator or "N/A")
-            key = (typ, host, path, indicator)
-
-            # counts and samples
-            count = int(item.count or 0)
-            samples = list(item.payload_samples or [])
-            if not samples and item.payload is not None:
-                samples = [item.payload]
-
-            if key not in xssGroups:
-                rep = Finding(
-                    type=typ,
-                    url=pageUrl,
-                    method=item.method or "GET",
-                    param=item.param,
-                    payload=item.payload,
-                    indicator=indicator,
-                    status_code=item.status_code,
-                    count=0,
-                    payload_samples=[],
-                    response_snippet=(item.response_snippet or "")[:200]
-                )
-                rep.count = (rep.count or 0) + (count or 1)
-
-                for sample in samples:
-                    if sample is not None and len(rep.payload_samples) < XSS_MAX_SAMPLES:
-                        if sample not in rep.payload_samples:
-                            rep.payload_samples.append(sample)
-
-                xssGroups[key] = rep
-                emitted.append(rep)
-
-            else:
-                rep = xssGroups[key]
-                rep.count = (rep.count or 0) + (count or 1)
-
-                for sample in samples:
-                    if sample is not None and len(rep.payload_samples) < XSS_MAX_SAMPLES:
-                        if sample not in rep.payload_samples:
-                            rep.payload_samples.append(sample)
-
-                try:
-                    if int(item.status_code or 0) > int(rep.status_code or 0):
-                        rep.status_code = item.status_code
-                except Exception:
-                    log.debug("Failed to update status_code in XSS group", exc_info=True)
-
-            continue
-
-        # Only collapse path and param findings to avoid XSS/ SQLI ect
-        isFile = ( typ in COLLAPSIBLE_TYPES)
-
-        if not isFile:
-            emitted.append(item)
-            continue
-
-        p = urlparse(rawUrl)
-        host = (p.netloc or "").lower()
-        scheme = (p.scheme or "").lower()
-        path = unquote(p.path or "/")
-        query = unquote(p.query or "")
-
-        # Normalise the path
-        normPath = posixpath.normpath(path)
-        if not normPath.startswith("/"):
-            normPath = "/" + normPath
-
-        # remove slash
-        if normPath != "/" and normPath.endswith("/"):
-            normPath = normPath.rstrip("/")
-
-        # Traversal variants cs direct hits
-        rawLower = ((p.path or "") + "?" + (p.query or "")).lower()
-        hadTraversal = ("/../" in rawLower or rawLower.startswith("../") or "%2e%2e" in rawLower or "%2f..%2f" in rawLower or "/..\\" in rawLower or "\\..\\" in rawLower or "/%2e%2e/" in rawLower)
-
-        # Try to find the target
-        targetBase = None
-        queryLow = query.lower()
-        for name in SENSITIVE_FILES:
-            if name in queryLow:
-                targetBase = name
-                break
-
-        if not targetBase:
-            baseCandidate = normPath.rsplit("/", 1)[-1].lower()
-            if baseCandidate.endswith(tuple(FILE_EXTENSIONS)) or baseCandidate in SENSITIVE_FILES:
-                targetBase = baseCandidate
-
-        groupPath = f"/{targetBase}" if targetBase and not targetBase.startswith("/") else (targetBase or normPath)
-
-        # Include type so path and param aren't merged
-        key = (typ, host, groupPath)
+        key = (typ, host, groupPath, indicator, param)
 
         if key not in groups:
             rep = Finding(
-                type=typ or "path",
-                url=f"{scheme}://{host}{groupPath}",
-                method=item.method or "GET",
-                param=item.param,
-                payload=item.payload,
-                indicator=(item.indicator or "N/A").strip(),
-                status_code=item.status_code,
+                type=typ or "unknown",
+                url=pageUrl,
+                method=(getattr(item, "method", "GET") or "GET"),
+                param=param,
+                payload=getattr(item, "payload", None),
+                indicator=indicator,
+                status_code=getattr(item, "status_code", None),
                 count=0,
                 payload_samples=[],
-                response_snippet=(item.response_snippet or "")[:200]
+                response_snippet=((getattr(item, "response_snippet", "") or "")[:200])
             )
-            groups[key] = {
-                "rep": rep,
-                "variant_path_count": 0,
-                "variant_samples": [],
-                "had_traversal": False,
-            }
+            groups[key] = rep
             emitted.append(rep)
 
-        group = groups[key]
-        group["variant_path_count"] += 1
-
-        if len(group["variant_samples"]) < PATH_MAX_SAMPLES:
-            group["variant_samples"].append(rawUrl)
-
-        group["had_traversal"] = group["had_traversal"] or hadTraversal
-
-        rep = group["rep"]
-        # Prefer first
-        if not rep.payload:
-            rep.payload = item.payload
-
-        ind = (item.indicator or "").strip()
-        if ind and (rep.indicator or "N/A") == "N/A":
-            rep.indicator = ind
+        rep = groups[key]
 
         try:
-            if int(item.status_code or 0) > int(rep.status_code or 0):
-                rep.status_code = item.status_code
-
+            rep.count = int(rep.count or 0) + (int(getattr(item, "count", 0) or 1))
         except Exception:
-            log.debug("Failed to update status_code in path/param group", exc_info=True)
+            rep.count = (rep.count or 0) + 1
 
-        rep.count = group["variant_path_count"]
-        rep.payload_samples = group["variant_samples"][:]
+        # Keep highest status code achieved
+        try:
+            if int(getattr(item, "status_code", 0) or 0) > int(getattr(rep, "status_code", 0) or 0):
+                rep.status_code = item.status_code
+        except Exception:
+            pass
 
+        if not rep.payload:
+            rep.payload = getattr(item, "payload", None)
+
+        # Assign sample caps
+        try:
+            if typ.startswith("xss"):
+                cap = XSS_MAX_SAMPLES
+            elif "sqli" in typ:
+                cap = SQLI_MAX_SAMPLES
+            elif ("path" in typ) or ("param" in typ):
+                cap = PATH_MAX_SAMPLES
+            else:
+                cap = 3
+        except Exception:
+            cap = 3
+
+        samples = list(getattr(item, "payload_samples", []) or [])
+        if not samples and getattr(item, "payload", None) is not None:
+            samples = [item.payload]
+
+        if samples:
+            seen = set(rep.payload_samples or [])
+            for samp in samples:
+                if samp is None:
+                    continue
+                if len(rep.payload_samples) >= cap:
+                    break
+                if samp not in seen:
+                    rep.payload_samples.append(samp)
+                    seen.add(samp)
+
+        if (rep.indicator or "N/A") == "N/A":
+            ind = (getattr(item, "indicator", "") or "").strip()
+            if ind:
+                rep.indicator = ind
     return emitted
 
 def autoSubmits(html, params):

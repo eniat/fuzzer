@@ -112,4 +112,5 @@ class ParamPathFuzzer(AbstractFuzzer):
         with self.lock:
             key = (response.url.split("?", 1)[0], indicator, "param")
             self.vulnerablePaths[key] = res
+        setattr(res, "bail", True)
         return res

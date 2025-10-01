@@ -68,6 +68,7 @@ class ParamXSSFuzzer(AbstractFuzzer):
         if "FUZZ" not in parsed.query:
             status("[-] No 'FUZZ' keyword found")
             log.info("No 'FUZZ' keyword found in query for %s", self.baseUrl)
+            self.ready= True
             return
 
         # Reconstruct base URL without query
@@ -154,7 +155,7 @@ class ParamXSSFuzzer(AbstractFuzzer):
 
         # Skip non-HTML, xml and javascript
         ctype = (response.headers.get("Content-Type") or "").lower()
-        if ctype and ("html" not in ctype and "xml" not in ctype and "javascript" not in ctype):
+        if ctype and all(t not in ctype for t in ("html", "xml", "javascript", "svg")):
             return None
 
         # If token bytes not present skip
@@ -184,7 +185,7 @@ class ParamXSSFuzzer(AbstractFuzzer):
             return None
 
         payload = (meta or {}).get("payload")
-        return Finding(
+        finding = Finding(
             type="xss_param",
             url=response.url,
             method="GET",
@@ -193,3 +194,5 @@ class ParamXSSFuzzer(AbstractFuzzer):
             status_code=response.status_code,
             response_snippet=body[:200],
         )
+        setattr(finding, "bail", True)
+        return finding

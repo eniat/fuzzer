@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urljoin
 from pathlib import PurePosixPath
 
-from uni_fuzzer.core.fuzzer import FuzzerPhase, PhaseContext
+from uni_fuzzer.core.fuzzer_phases import FuzzerPhase, PhaseContext
 from uni_fuzzer.core.utility import status, getParents, getDirectories
 from uni_fuzzer.auth.auth import buildSessions
 from uni_fuzzer.fuzzers.path_traversal import TraversalPathFuzzer

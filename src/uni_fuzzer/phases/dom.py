@@ -1,7 +1,7 @@
 import logging
 import threading
 
-from uni_fuzzer.core.fuzzer import FuzzerPhase, PhaseContext
+from uni_fuzzer.core.fuzzer_phases import FuzzerPhase, PhaseContext
 from uni_fuzzer.core.utility import status
 from uni_fuzzer.auth.auth import buildSessions
 from uni_fuzzer.fuzzers.xss_dom import DomXSSFuzzer

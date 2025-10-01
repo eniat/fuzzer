@@ -3,12 +3,13 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urljoin
 
-from uni_fuzzer.core.fuzzer import FuzzerPhase, PhaseContext
+from uni_fuzzer.core.fuzzer_phases import FuzzerPhase, PhaseContext
 from uni_fuzzer.core.utility import status, getDirectories
 from uni_fuzzer.auth.auth import buildSessions
 from uni_fuzzer.fuzzers.xss_stored import StoredXSSFuzzer
 from uni_fuzzer.fuzzers.xss_form import FormXSSFuzzer
-from uni_fuzzer.fuzzers.sqli import SQLiFuzzer
+from uni_fuzzer.fuzzers.sql_inj import InjSQLFuzzer
+from uni_fuzzer.fuzzers.sql_iblind import BlindSQLiFuzzer
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class FormsPhase (FuzzerPhase):
         # Check for wordlists and Forms if not set False
         if (self.run_xss_forms or self.run_xss_stored) and not self.wordlistXss:
             return []
-        if (self.run_sqli or self.run_sqli_b) and not self.wordlistSqli:
+        if self.run_sqli and not self.wordlistSqli:
             return []
         if not forms:
             return []
@@ -92,9 +93,6 @@ class FormsPhase (FuzzerPhase):
                     wordlistPath=self.wordlistXss,
                     session=sess,
                     auth=False,
-                    loginUsername=args.username,
-                    loginPassword=args.password,
-                    loginPath=args.login_path,
                     token=ctx.runToken,
                     bailEvent=bail
                 )
@@ -116,16 +114,15 @@ class FormsPhase (FuzzerPhase):
 
                 status(f"[Thread] SQLi Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
-                sqli_form_fuzzer = SQLiFuzzer(
+                sqli_form_fuzzer = InjSQLFuzzer(
                     baseUrl=fullUrl,
-                    useCrawler=False,
                     wordlistPath=self.wordlistSqli,
                     session=sess,
                     auth=False,
                     bailEvent=bail
                 )
 
-                res = sqli_form_fuzzer.SQLiFuzz([form])
+                res = sqli_form_fuzzer.run({"forms": [form], "endpoints": endpoints})
 
                 if res:
                     results.extend(res if args.report_all else [v for v in res if v.type != "sqli_potential"])
@@ -134,16 +131,15 @@ class FormsPhase (FuzzerPhase):
 
                 status(f"[Thread] SQLi Blind Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
-                sqli_blind_fuzzer = SQLiFuzzer(
+                sqli_blind_fuzzer = BlindSQLiFuzzer(
                     baseUrl=fullUrl,
-                    useCrawler=False,
                     wordlistPath=self.wordlistSqli,
                     session=sess,
                     auth=False,
                     bailEvent=bail
                 )
 
-                res = sqli_blind_fuzzer.SQLiBlindFuzz([form])
+                res = sqli_blind_fuzzer.run({"forms": [form], "endpoints": endpoints})
 
                 if res:
                     results.extend(res)
