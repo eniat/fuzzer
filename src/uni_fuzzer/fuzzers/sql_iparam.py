@@ -12,9 +12,9 @@ from uni_fuzzer.core.utility import isFuzzableField, loadWordlist, autoSubmits, 
 
 log = logging.getLogger(__name__)
 
-class InjSQLFuzzer(AbstractFuzzer):
+class ParamSQLFuzzer(AbstractFuzzer):
     """
-        Takes the forms retrieved by the crawler and fuzzes them for SQLi vulnerabilities
+        Takes the endpoints retrieved by the crawler and fuzzes them for SQLi vulnerabilities
     """
 
     def __init__(self, baseUrl, wordlistPath=None, session=None, bailEvent=None, cfg=None, auth=False,loginUsername=None, loginPassword=None, loginPath=None,headers=None):
@@ -39,55 +39,59 @@ class InjSQLFuzzer(AbstractFuzzer):
         self.MAX_SAMPLES_PER_GROUP = self.cfg["sqli"]["max_samples_per_group"]
 
         self.targets = []
-        self.vulnerableForms = {}
+        self.vulnerableParams = {}
 
 
     def prepare(self, ctx):
         """
-            Get valid form/target and probe
+            Get valid endpoints/target and probe
         """
         self.targets = []
         seen = set()
+
         if not ctx:
             return
 
         if isinstance(ctx, dict):
-            forms = ctx.get("forms") or []
+            endpoints = ctx.get("endpoints") or []
         else:
-            forms = getattr(ctx, "forms", []) or []
+            endpoints = getattr(ctx, "endpoints", []) or []
 
         # Normalize Urls
         parsed = urlparse(self.baseUrl)
         origin = f"{parsed.scheme}://{parsed.netloc}"
 
-        # Sort Forms first for valid targets
-        for form in forms:
+        # Sort endpoints with parameters
+        for ep in endpoints:
 
-            url = form.get("url")
-            method = (form.get("method") or "POST").upper()
-            fields = form.get("formFields") or []
-
-            # Skip invalid form objects
-            if not url or not fields:
+            if not isinstance(ep, dict):
                 continue
 
-            if not url.startswith("http"):
-                url = f"{origin}{url}"
+            rawUrl = ep.get("url")
+            params = list(ep.get("params") or [])
+
+            if not rawUrl or not params:
+                continue
+
+            url = rawUrl if rawUrl.startswith("http") else f"{origin}{rawUrl}"
+            method = "GET"
+            # Fields are the param keys
+            fields = params[:]
+
+            fuzzTargets = [f for f in fields if isFuzzableField(f)]
+            if not fuzzTargets:
+                continue
 
             tkey = (url, method, tuple(sorted(fields)))
             if tkey in seen:
                 continue
             seen.add(tkey)
 
-            fuzzTargets = [f for f in fields if isFuzzableField(f)]
-            if not fuzzTargets:
-                continue
+            # Get a baseline for later comparisons
+            baseText, baseStatus = sqliBaseline(self.session, self.headers, url, method, fields)
 
             if not probeReactivity(self.session, url, method, fields, fuzzTargets, self.headers):
                 continue
-
-            # Get a baseline for later comparisons
-            baseText, baseStatus = sqliBaseline(self.session, self.headers, url, method, fields)
 
             self.targets.append({
                 "url": url,
@@ -95,48 +99,43 @@ class InjSQLFuzzer(AbstractFuzzer):
                 "fields": fields,
                 "fuzz_targets": fuzzTargets,
                 "base_text": baseText,
-                "base_status": baseStatus
+                "base_status": baseStatus,
             })
-        log.info("[SQLi] prepared %d forms (reactive & fuzzable)", len(self.targets))
-
 
     def run(self, ctx=None):
         """
             Build batch and execute via runBatch
         """
         self.prepare(ctx)
-
-        findings = []
         seen = set()
 
         if not self.targets or not self.payloads:
-            log.info("[SQLi] nothing to fuzz ")
-            return list(self.vulnerableForms.values())
+            return list(self.vulnerableParams.values())
+
+        batch = []
 
         for targ in self.targets:
             url, method, fields = targ["url"], targ["method"], targ["fields"]
             fuzzTargets = targ["fuzz_targets"]
             baseText, baseStatus = targ["base_text"], targ["base_status"]
 
-            batch = []
-
             for raw in self.payloads:
                 # If bail on first then bail
                 if self.bailEvent and self.bailEvent.is_set():
                     break
-
-                jKey = (method, url, tuple(sorted(fields)), raw)
-                if jKey in seen:
-                    continue
-                seen.add(jKey)
 
                 for target in fuzzTargets:
                     # If bail on first then bail
                     if self.bailEvent and self.bailEvent.is_set():
                         break
 
+                    jKey = (method,url, tuple(sorted(fields)), target, raw)
+                    if jKey in seen:
+                        continue
+                    seen.add(jKey)
+
                     if method == "POST":
-                        # POST form fuzzing
+                        # POST param fuzzing
                         data = {f: (raw if f == target else "1") for f in fields}
                         data = autoSubmits(baseText, data)
                         meta = {
@@ -149,7 +148,7 @@ class InjSQLFuzzer(AbstractFuzzer):
                              "allow_redirects": self.cfg["http"]["redirects"]["fuzz_post"]},meta))
 
                     else:
-                        # GET form fuzzing
+                        # GET param fuzzing
                         params = {f: (raw if f == target else "1") for f in fields}
                         params = autoSubmits(baseText, params)
 
@@ -169,8 +168,8 @@ class InjSQLFuzzer(AbstractFuzzer):
                             "allow_redirects": self.cfg["http"]["redirects"]["fuzz_get"]}, meta
                         ))
 
-            findings = self.runBatch(batch, concurrency=self.cfg["concurrency"]["max_workers"])
-        return findings or list(self.vulnerableForms.values())
+        findings = self.runBatch(batch, concurrency=self.cfg["concurrency"]["max_workers"])
+        return findings or list(self.vulnerableParams.values())
 
 
     def analyzeResponse(self, response, meta):
@@ -191,12 +190,16 @@ class InjSQLFuzzer(AbstractFuzzer):
         # Check for SQL Error
         isErr, indicator = detectSQLError(body)
 
+        baseLower = (baseText or "").lower()
+        if isErr and indicator and indicator.lower() in baseLower:
+            isErr = False
+
         if isErr or (statusC != baseStatus and statusC >= 400):
             pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
-            resultsKey = (pageKey,"sql_error", "sqli_potential")
-            find = self.vulnerableForms.get(resultsKey)
+            resultsKey = (pageKey, method, target, "sql_error", "sqli_potential")
+            find = self.vulnerableParams.get(resultsKey)
             if not find:
-                self.vulnerableForms[resultsKey] = Finding(
+                self.vulnerableParams[resultsKey] = Finding(
                     type="sqli_potential",
                     url=pageKey,
                     method=method,
@@ -208,24 +211,31 @@ class InjSQLFuzzer(AbstractFuzzer):
                     payload_samples=[payload] if payload is not None else [],
                     response_snippet=(body or "")[:200]
                 )
-                find = self.vulnerableForms[resultsKey]
+                find = self.vulnerableParams[resultsKey]
 
             else:
-                if payload is not None and len(find.payload_samples) < self.MAX_SAMPLES_PER_GROUP and payload not in find.payload_samples:
+                find.count = (find.count or 0) + 1
+                if payload is not None and len(
+                        find.payload_samples) < self.MAX_SAMPLES_PER_GROUP and payload not in find.payload_samples:
                     find.payload_samples.append(payload)
-                    find.count = (find.count or 0) + 1
             setattr(find, "bail", False)
             return find
+
+        if statusC == baseStatus:
+            absDelta = abs(len(body) - len(baseText))
+            relDelta = absDelta / max(1, len(baseText))
+            if absDelta < 40 and relDelta < 0.02:
+                return None
 
         # Check for valid SQLi ran code
         if baseStatus and (statusC != baseStatus or detectSQLiDiff(baseText, body, payload=payload)):
 
             pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
             resultsKey = (pageKey, method, target, "detected_sql_content", "sqli_inj")
-            find = self.vulnerableForms.get(resultsKey)
+            find = self.vulnerableParams.get(resultsKey)
 
             if not find:
-                self.vulnerableForms[resultsKey] = Finding(
+                self.vulnerableParams[resultsKey] = Finding(
                     type="sqli_inj",
                     url=pageKey,
                     method=method,
@@ -237,12 +247,12 @@ class InjSQLFuzzer(AbstractFuzzer):
                     payload_samples=[payload] if payload is not None else [],
                     response_snippet=(body or "")[:200]
                 )
-                find = self.vulnerableForms[resultsKey]
+                find = self.vulnerableParams[resultsKey]
                 setattr(find, "bail", True)
             else:
+                find.count = (find.count or 0) + 1
                 if payload is not None and len(find.payload_samples) < self.MAX_SAMPLES_PER_GROUP and payload not in find.payload_samples:
                     find.payload_samples.append(payload)
-                    find.count = (find.count or 0) + 1
             return find
 
         return None

@@ -146,7 +146,7 @@ sqli:
   timing_payload_trials: 2
   timing_confirm_probes: 2
   plain_preprobe_min_delta: 1
-  confirm_min_size_delta: 30
+  confirm_min_size_delta: 100
   boolean_true:
     - "1=1"
     - "2>1"

@@ -63,10 +63,8 @@ class BlindSQLiFuzzer(AbstractFuzzer):
 
         if isinstance(ctx, dict):
             forms = ctx.get("forms") or []
-            endpoints = ctx.get("endpoints") or []
         else:
             forms = getattr(ctx, "forms", []) or []
-            endpoints = getattr(ctx, "endpoints", []) or []
 
         # Normalize Urls
         parsed = urlparse(self.baseUrl)
@@ -85,44 +83,6 @@ class BlindSQLiFuzzer(AbstractFuzzer):
 
             if not url.startswith("http"):
                 url = f"{origin}{url}"
-
-            fuzzTargets = [f for f in fields if isFuzzableField(f)]
-            if not fuzzTargets:
-                continue
-
-            tkey = (url, method, tuple(sorted(fields)))
-            if tkey in seen:
-                continue
-            seen.add(tkey)
-
-            # Get a baseline for later comparisons
-            baseText, baseStatus = sqliBaseline(self.session, self.headers, url, method, fields)
-
-            self.targets.append({
-                "url": url,
-                "method": method,
-                "fields": fields,
-                "fuzz_targets": fuzzTargets,
-                "base_text": baseText,
-                "base_status": baseStatus,
-            })
-
-        # Sort endpoints with parameters
-        for ep in endpoints:
-
-            if not isinstance(ep, dict):
-                continue
-
-            rawUrl = ep.get("url")
-            params = list(ep.get("params") or [])
-
-            if not rawUrl or not params:
-                continue
-
-            url = rawUrl if rawUrl.startswith("http") else f"{origin}{rawUrl}"
-            method = "GET"
-            # Fields are the param keys
-            fields = params[:]
 
             fuzzTargets = [f for f in fields if isFuzzableField(f)]
             if not fuzzTargets:

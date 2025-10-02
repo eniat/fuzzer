@@ -79,7 +79,7 @@ class FormsPhase (FuzzerPhase):
                     bailEvent=bail
                 )
 
-                res = xss_form_fuzzer.run({"forms": [form], "endpoints": endpoints})
+                res = xss_form_fuzzer.run({"forms": [form]})
 
                 if res:
                     results.extend(res)
@@ -122,7 +122,7 @@ class FormsPhase (FuzzerPhase):
                     bailEvent=bail
                 )
 
-                res = sqli_form_fuzzer.run({"forms": [form], "endpoints": endpoints})
+                res = sqli_form_fuzzer.run({"forms": [form]})
 
                 if res:
                     results.extend(res if args.report_all else [v for v in res if v.type != "sqli_potential"])
@@ -139,7 +139,7 @@ class FormsPhase (FuzzerPhase):
                     bailEvent=bail
                 )
 
-                res = sqli_blind_fuzzer.run({"forms": [form], "endpoints": endpoints})
+                res = sqli_blind_fuzzer.run({"forms": [form]})
 
                 if res:
                     results.extend(res)
