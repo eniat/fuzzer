@@ -7,9 +7,9 @@ from typing import Any, Dict, List
 class PhaseContext:
     args: Any
     cfg: Dict[str, Any]
-    runToken: str
     endpoints: List[dict]
     forms: List[dict]
+    rawForms: List[dict]
     baseUrl: str
     shared: Dict[str, Any]
     log: logging.Logger

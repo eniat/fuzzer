@@ -1,7 +1,7 @@
 import logging
 from html import unescape
 
-from urllib.parse import urlparse, quote, unquote_plus
+from urllib.parse import urlparse, quote, unquote_plus, urljoin
 from uuid import uuid4
 
 from uni_fuzzer.core.base_fuzzer import AbstractFuzzer
@@ -159,7 +159,8 @@ class FormXSSFuzzer(AbstractFuzzer):
                         "payload": raw,
                         "marked": marked,
                         "method": "POST",
-                        "phase": "submit"
+                        "phase": "submit",
+                        "origin_url": url
                     }
 
                     batch.append(("POST", url, {"headers": self.headers, "data": data, "allow_redirects": False},meta))
@@ -185,7 +186,8 @@ class FormXSSFuzzer(AbstractFuzzer):
                         "payload": raw,
                         "marked": marked,
                         "method": "GET",
-                        "phase": "submit"
+                        "phase": "submit",
+                        "origin_url": url
                     }
 
                     batch.append(( "GET", fullUrl,{"headers": self.headers, "allow_redirects": False}, meta))
@@ -230,6 +232,22 @@ class FormXSSFuzzer(AbstractFuzzer):
 
         if not ok:
             return None
+
+        target = response.url
+        loc = response.headers.get("Location")
+        if 300 <= response.status_code < 400 and loc:
+            target = urljoin(response.url, loc)
+
+        # revisit without payload to check if stored
+        revisit = (meta or {}).get("origin_url") or target
+        revisit = revisit.split("?", 1)[0]
+        try:
+            res = self.session.get(revisit, headers=self.headers, timeout=self.cfg["http"]["timeout_get_seconds"],allow_redirects=True)
+            if self.tokenB in (res.content or b""):
+                return None
+        except Exception:
+            log.debug("Revisit check failed for %s", revisit, exc_info=True)
+            pass
 
         payload = (meta or {}).get("payload")
         method = (meta or {}).get("method")

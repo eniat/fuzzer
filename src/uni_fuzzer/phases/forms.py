@@ -2,6 +2,7 @@ import threading
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urljoin
+from uuid import uuid4
 
 from uni_fuzzer.core.fuzzer_phases import FuzzerPhase, PhaseContext
 from uni_fuzzer.core.utility import status, getDirectories
@@ -67,6 +68,7 @@ class FormsPhase (FuzzerPhase):
                 fullUrl = urljoin(base, fullUrl)
 
             if self.run_xss_forms:
+                runToken = f"XSSCanary-{uuid4().hex[:8]}"
 
                 status(f"[Thread] XSS Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
@@ -75,7 +77,7 @@ class FormsPhase (FuzzerPhase):
                     wordlistPath=self.wordlistXss,
                     session=sess,
                     auth=False,
-                    token=ctx.runToken,
+                    token=runToken,
                     bailEvent=bail
                 )
 
@@ -85,6 +87,7 @@ class FormsPhase (FuzzerPhase):
                     results.extend(res)
 
             if self.run_xss_stored:
+                runToken = f"XSSCanary-{uuid4().hex[:8]}"
 
                 status(f"[Thread] XSS Stored Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
@@ -93,19 +96,11 @@ class FormsPhase (FuzzerPhase):
                     wordlistPath=self.wordlistXss,
                     session=sess,
                     auth=False,
-                    token=ctx.runToken,
+                    token=runToken,
                     bailEvent=bail
                 )
 
-                # Pass directories of forms/ shared directory endpoints
-                formDir = getDirectories(urlparse(fullUrl).path)
-                relevantEndpoints = [
-                    endp["url"] if endp["url"].startswith("http") else urljoin(base, endp["url"])
-                    for endp in endpoints
-                    if getDirectories(urlparse(endp["url"]).path) == formDir
-                ]
-
-                res = xss_stored_fuzzer.run({"forms": [form], "endpoints": relevantEndpoints})
+                res = xss_stored_fuzzer.run({"forms": [form]})
 
                 if res:
                     results.extend(res)

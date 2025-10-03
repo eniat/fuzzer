@@ -1,5 +1,6 @@
 import logging
 import threading
+from uuid import uuid4
 
 from uni_fuzzer.core.fuzzer_phases import FuzzerPhase, PhaseContext
 from uni_fuzzer.core.utility import status
@@ -26,8 +27,9 @@ class DomXSSPhase(FuzzerPhase):
         """
 
         args = ctx.args
+        runToken = f"XSSCanary-{uuid4().hex[:8]}"
 
-        forms = ctx.forms or []
+        forms = ctx.rawForms or []
         endpoints = ctx.endpoints or []
         if not forms and not endpoints:
             return []
@@ -60,7 +62,7 @@ class DomXSSPhase(FuzzerPhase):
                 loginUsername=args.username,
                 loginPassword=args.password,
                 loginPath=args.login_path,
-                token=ctx.runToken,
+                token=runToken,
                 bailEvent=bail
             )
 

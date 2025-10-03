@@ -19,7 +19,7 @@ def probeReactivity(session, url, method, fields, fuzzField, headers):
 
         if method == "POST":
             # Build POST
-            baseData = {f: "1" for f in fields}
+            baseData = {f: "' OR 1=1--" for f in fields}
 
             baseRes = session.post(url, data=baseData, headers=headers, timeout=cfg["http"]["timeout_post_seconds"],allow_redirects=cfg["http"]["redirects"]["submit"])
             baseBody = baseRes.text or ""
@@ -34,7 +34,7 @@ def probeReactivity(session, url, method, fields, fuzzField, headers):
 
         else:
             # Build GET
-            baseParams = [f"{f}=1" for f in fields]
+            baseParams = {f"{f}=' OR 1=1--" for f in fields}
             sep = "&" if "?" in url else "?"
             baseUrl = f"{url}{sep}{'&'.join(baseParams)}"
 
@@ -43,7 +43,7 @@ def probeReactivity(session, url, method, fields, fuzzField, headers):
             baseStatus = baseRes.status_code
 
             # Flip the 1 to 2
-            params = [f"{f}=2" if f in fuzzField else f"{f}=1" for f in fields]
+            params = {f"{f}=2" if f in fuzzField else f"{f}=1" for f in fields}
             fullUrl = f"{url}{sep}{'&'.join(params)}"
 
             res = session.get(fullUrl,headers=headers,timeout=cfg["http"]["timeout_get_seconds"], allow_redirects=cfg["http"]["redirects"]["fuzz_get"])
@@ -56,6 +56,13 @@ def probeReactivity(session, url, method, fields, fuzzField, headers):
 
         # Detect difference
         if detectSQLiDiff(baseBody, body, payload=None):
+            return True
+
+        # Allow post forms with fuzzable fields
+        if method == "POST":
+            return True
+
+        if any(ind in baseBody.lower() for ind in cfg["sql"]["error_signatures"]):
             return True
 
         # Check min change

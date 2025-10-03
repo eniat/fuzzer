@@ -107,7 +107,6 @@ xss:
     - "\";sessionStorage.setItem(\"y\",\"{CANARY}\")//"
     - "</script><script>window.__XSS_CANARY__=\"{CANARY}\"</script>"
   dom_delay_seconds: 0.25
-  stored_settle_seconds: 3
   regex:
     attr: "\\bon\\w+\\s*=\\s*(['\\\"]).*?({token}).*?\\1"
     jsurl: "(?:href|src)\\s*=\\s*(['\\\"])\\s*javascript:.*?({token}).*?\\1"
@@ -116,20 +115,16 @@ xss:
 sqli:
   error_signatures:
     - "you have an error in your sql syntax"
-    - "mysql_fetch"
-    - "mysqli_"
-    - "pg_query"
     - "syntax error at or near"
     - "unclosed quotation mark after the character string"
-    - "ora-"
     - "unknown column"
     - "no such column"
     - "unrecognized token"
-    - "near \"select\""
     - "warning: mysql"
     - "odbc sql server driver"
-    - "sqlstate"
     - "quoted string not properly terminated"
+    - "error: "
+    - "incorrect syntax"
   blind_markers:
     - "sleep("
     - "benchmark("
@@ -146,7 +141,7 @@ sqli:
   timing_payload_trials: 2
   timing_confirm_probes: 2
   plain_preprobe_min_delta: 1
-  confirm_min_size_delta: 100
+  confirm_min_size_delta: 200
   boolean_true:
     - "1=1"
     - "2>1"

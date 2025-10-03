@@ -3,6 +3,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urljoin
 from pathlib import PurePosixPath
+from uuid import uuid4
 
 from uni_fuzzer.core.fuzzer_phases import FuzzerPhase, PhaseContext
 from uni_fuzzer.core.utility import status, getParents, getDirectories
@@ -146,6 +147,7 @@ class EndpointsPhase (FuzzerPhase):
                     results.extend(res)
 
             if self.run_xss_params and params:
+                runToken = f"XSSCanary-{uuid4().hex[:8]}"
 
                 # XSS fuzzing via params
                 fuzzQuery = "&".join([f"{p}=FUZZ" for p in params])
@@ -159,7 +161,7 @@ class EndpointsPhase (FuzzerPhase):
                     wordlistPath=self.wordlistXss,
                     session=sess,
                     auth=False,
-                    token=ctx.runToken,
+                    token=runToken,
                     bailEvent=bail
                 )
 

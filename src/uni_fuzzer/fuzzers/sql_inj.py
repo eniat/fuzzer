@@ -120,6 +120,9 @@ class InjSQLFuzzer(AbstractFuzzer):
 
             batch = []
 
+            planned = len(self.payloads) * len(fuzzTargets)
+            log.info("[SQLi] planning %d requests for %s %s", planned, method, url)
+
             for raw in self.payloads:
                 # If bail on first then bail
                 if self.bailEvent and self.bailEvent.is_set():
@@ -141,7 +144,7 @@ class InjSQLFuzzer(AbstractFuzzer):
                         data = autoSubmits(baseText, data)
                         meta = {
                             "url": url, "method": "POST", "target": target, "payload": raw,
-                            "base_text": baseText, "base_status": baseStatus
+                            "base_text": baseText, "base_status": baseStatus, "fields": fields,"origin_url": url
                         }
                         batch.append((
                             "POST", url,{"data": data, "headers": self.headers,
@@ -160,7 +163,7 @@ class InjSQLFuzzer(AbstractFuzzer):
 
                         meta = {
                             "url": fullUrl, "method": "GET", "target": target, "payload": raw,
-                            "base_text": baseText, "base_status": baseStatus
+                            "base_text": baseText, "base_status": baseStatus, "fields": fields,"origin_url": url
                         }
 
                         batch.append((
@@ -187,11 +190,22 @@ class InjSQLFuzzer(AbstractFuzzer):
         target = (meta or {}).get("target")
         finUrl = (meta or {}).get("url") or getattr(response, "url", "")
 
+        fields = meta.get("fields") or []
+        actionUrl = meta.get("origin_url") or finUrl.split("?", 1)[0]
+
+        # Fresh baseline to double check
+        freshText, freshStatus = sqliBaseline(self.session, self.headers, actionUrl, method, fields)
 
         # Check for SQL Error
         isErr, indicator = detectSQLError(body)
 
         if isErr or (statusC != baseStatus and statusC >= 400):
+
+            fErr, _ = detectSQLError(freshText or "")
+            if fErr or (freshStatus != baseStatus and freshStatus >= 400):
+                log.debug("Second baseline matched (%s) false positive", actionUrl)
+                return None
+
             pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
             resultsKey = (pageKey,"sql_error", "sqli_potential")
             find = self.vulnerableForms.get(resultsKey)
@@ -218,7 +232,11 @@ class InjSQLFuzzer(AbstractFuzzer):
             return find
 
         # Check for valid SQLi ran code
+        freshTrips = (freshStatus != baseStatus) or detectSQLiDiff(baseText, freshText or "", payload=None)
         if baseStatus and (statusC != baseStatus or detectSQLiDiff(baseText, body, payload=payload)):
+            if freshTrips:
+                log.debug("Second baseline matched (%s) false positive", actionUrl)
+                return None
 
             pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
             resultsKey = (pageKey, method, target, "detected_sql_content", "sqli_inj")

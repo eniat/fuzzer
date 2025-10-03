@@ -28,7 +28,7 @@ class StoredXSSFuzzer(AbstractFuzzer):
 
         self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.token = token or f"XSSCanary-{uuid4().hex[:8]}"
-        self.tokenLow = self.token.lower()
+        self.tokenB = self.token.encode("utf-8", errors="ignore")
 
         self.auth = auth
         self.loginUsername = loginUsername
@@ -88,10 +88,8 @@ class StoredXSSFuzzer(AbstractFuzzer):
 
         if isinstance(ctx, dict):
             forms = ctx.get("forms")
-            endpoints = ctx.get("endpoints")
         else:
             forms = getattr(ctx, "forms", None)
-            endpoints = getattr(ctx, "endpoints", None)
 
         if not self.prepared:
             self.prepare(None)
@@ -150,7 +148,7 @@ class StoredXSSFuzzer(AbstractFuzzer):
 
                     meta = {"phase": "submit", "kind": "xss_stored_submit",
                             "payload": raw, "marked": marked,
-                            "submit_method": "POST", "orig_url": url}
+                            "submit_method": "POST", "origin_url": url}
 
                     batch.append(("POST", url,{"headers": self.headers,"data": data,
                                           "allow_redirects": self.cfg["http"]["redirects"]["submit"]}, meta))
@@ -172,147 +170,74 @@ class StoredXSSFuzzer(AbstractFuzzer):
 
                     meta = {"phase": "submit", "kind": "xss_stored_submit",
                             "payload": raw, "marked": marked,
-                            "submit_method": "GET", "orig_url": url}
+                            "submit_method": "GET", "origin_url": url}
 
                     batch.append(("GET", fullUrl, {"headers": self.headers,
                                                 "allow_redirects": self.cfg["http"]["redirects"]["submit"]}, meta))
 
-
-        # Collect results
-        if batch:
-            for res, meta in self.runBatch(batch, concurrency=self.cfg["concurrency"]["max_workers"],collectRaw=True):
-
-                try:
-                    if hasattr(res, "url"):
-                        finUrl = getattr(res, "url", None)
-
-                        if finUrl and finUrl not in pages:
-                            pages.append(finUrl)
-                        loc = res.headers.get("Location")
-
-                        if loc:
-                            dest = loc if loc.startswith("http") else urljoin(finUrl or origin, loc)
-                            if dest and dest not in pages:
-                                pages.append(dest)
-
-                except Exception:
-                    log.debug("Submission post process failed", exc_info=True)
-
-        #Merge extra endpoints
-        if endpoints:
-            for end in endpoints:
-                if not end:
-                    continue
-
-                if isinstance(end, str):
-                    dest = end if end.startswith("http") else f"{origin}{end}"
-
-                else:
-                    rawUrl = end.get("url")
-                    dest = rawUrl if (rawUrl and rawUrl.startswith("http")) else (f"{origin}{rawUrl}" if rawUrl else None)
-                if dest and dest not in pages:
-                    pages.append(dest)
-        if not pages:
+        if not batch:
             return []
 
-        # Short wait for settle
-        try:
-            time.sleep(self.cfg["xss"]["stored_settle_seconds"])
-        except Exception:
-            log.debug("Sleep interrupted during stored settle", exc_info=True)
+        findings = self.runBatch(batch, concurrency=self.cfg["concurrency"]["max_workers"])
 
-        # Revisit part
-
-        revisitHeaders = dict(self.headers)
-        revisitHeaders["Cache-Control"] = "no-cache"
-        revisitHeaders["Pragma"] = "no-cache"
-        revisitHeaders["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-
-        pages = list(dict.fromkeys(pages))
-        batchR = []
-        for page in pages:
-            meta = {
-                "phase": "revisit",
-                "kind": "xss_stored_revisit"
-            }
-            batchR.append(("GET", page,{"headers": revisitHeaders,
-                                   "allow_redirects": self.cfg["http"]["redirects"]["stored_xss"]}, meta))
-
-        if not batchR:
-            return []
-
-        findings = self.runBatch(batchR, concurrency=self.cfg["concurrency"]["max_workers"])
         return findings
-
 
     def analyzeResponse(self, response, meta):
         """
             analyze the response for stored XSS
         """
 
-        if (meta or {}).get("phase") != "revisit":
+        target = response.url
+        loc = response.headers.get("Location")
+        if 300 <= response.status_code < 400 and loc:
+            target = urljoin(response.url, loc)
+
+        # revisit without payload to check if stored
+        revisit = (meta or {}).get("origin_url") or target
+        revisit = revisit.split("?", 1)[0]
+        try:
+            res = self.session.get(revisit, headers=self.headers, timeout=self.cfg["http"]["timeout_get_seconds"], allow_redirects=True)
+        except Exception:
+            log.debug("Revisit check failed for %s", revisit, exc_info=True)
             return None
 
-        ctype = (response.headers.get("Content-Type") or "").lower()
+        # Skip non-HTML, xml and javascript
+        ctype = (res.headers.get("Content-Type") or "").lower()
+
         if ctype and all(t not in ctype for t in ("html", "xml", "javascript", "svg")):
             return None
 
-        body = response.text or ""
+        revisitB = res.content or b""
+        if self.tokenB not in revisitB:
+            return None
+
+        enc = res.encoding or "utf-8"
+        body = revisitB.decode(enc, errors="ignore")
         low = body.lower()
         lowU = unescape(body).lower()
         lowQ = unquote_plus(body).lower()
 
-        # If no token quick detect pass
-        if self.tokenLow not in low and self.tokenLow not in lowU and self.tokenLow not in lowQ:
-            return None
-
-        finUrl = getattr(response, "url", "") or ""
-        base = finUrl.split("?", 1)[0].split("#", 1)[0]
-
-        # Check if payloads still persists
-        try:
-            p = urlparse(base)
-            scheme = (p.scheme or "").lower()
-            netloc = (p.netloc or "").lower()
-            path = p.path or "/"
-
-            if path != "/" and path.endswith("/"):
-                path = path.rstrip("/")
-            pageKey = f"{scheme}://{netloc}{path}"
-
-        except Exception:
-            pageKey = (base.rstrip("/")).lower()
+        marked = (meta or {}).get("marked")
+        if marked:
+            mlow = marked.lower()
+            if mlow not in low and mlow not in lowU and mlow not in lowQ:
+                return None
 
         ok, indicator = detectXSS(body, self.token)
+
         if not ok:
             return None
-        indicator = indicator or "N/A"
 
-        chosen = None
-        for rawSamp, markedSamp, _ in self.prebuiltPayloads:
-            mlow = markedSamp.lower()
-            if mlow in low or mlow in lowU or mlow in lowQ:
-                chosen = (rawSamp, markedSamp)
-                break
-
-        if chosen is None:
-            rawRep, markedRep = (None, self.token)
-        else:
-            rawRep, markedRep = chosen
-
-        # Check if reported before
-        key = (pageKey, (indicator or "N/A"), markedRep)
-        if key in self.reported:
-            return None
-        self.reported.add(key)
-        finding =  Finding(
+        payload = (meta or {}).get("payload")
+        method = (meta or {}).get("method")
+        finding = Finding(
             type="xss_stored",
-            url=pageKey,
-            method="GET",
-            payload=rawRep,
+            url=res.url,
+            method=method,
+            payload=payload,
             indicator=(indicator or "N/A"),
-            status_code=response.status_code,
-            response_snippet=body[:200]
+            status_code=res.status_code,
+            response_snippet=body[:200],
         )
         setattr(finding, "bail", True)
         return finding

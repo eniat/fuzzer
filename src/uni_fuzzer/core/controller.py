@@ -119,7 +119,6 @@ def run(args):
     if args.use_crawler:
 
         allVulnerabilities = []
-        runToken = f"XSSCanary-{uuid4().hex[:8]}"
 
         status("\n[+] Using crawler to discover endpoints and forms...")
 
@@ -139,9 +138,9 @@ def run(args):
         if args.output_to_json:
             crawlerJson(endpoints, forms, output_to_json=True)
 
-        rawDomForms = forms[:]
+        rawForms = forms[:]
 
-        forms = [
+        filteredForms  = [
             f for f in forms
             if any(isFuzzableField(field) for field in f.get("formFields", []))
         ]
@@ -163,9 +162,9 @@ def run(args):
         ctx = PhaseContext(
             args=args,
             cfg=cfg,
-            runToken=runToken,
             endpoints=endpoints,
-            forms=forms if not (args.xss_dom or args.all) else rawDomForms,
+            forms=filteredForms,
+            rawForms=rawForms,
             baseUrl=base,
             shared=shared,
             log=log
