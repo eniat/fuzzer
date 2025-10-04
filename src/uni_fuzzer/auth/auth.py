@@ -9,9 +9,9 @@ from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.wait import WebDriverWait
 from bs4 import BeautifulSoup
 
-from uni_fuzzer.core.utility import get_cfg, status
-cfg = get_cfg()
+from ..core.utility import get_cfg
 
+cfg = get_cfg()
 log = logging.getLogger(__name__)
 
 def seleniumLogin(driver, baseUrl, username, password, loginPath=None, selectors=None):
@@ -64,7 +64,6 @@ def seleniumLogin(driver, baseUrl, username, password, loginPath=None, selectors
         return True
 
     except Exception:
-        status("[!] Selenium login failed")
         log.warning("Selenium login failed", exc_info=True)
         return False
 
@@ -151,7 +150,6 @@ def login(session, baseUrl, username, password, loginPath=None, selectors=None, 
         return lpPath != curPath
 
     except Exception :
-        status("[!] HTTP login failed")
         log.warning("HTTP login failed", exc_info=True)
         return False
 
@@ -195,14 +193,15 @@ def buildSessions(auth, username, password, start_url, login_path, desiredTasks=
             try:
                 ok = login(sess, start_url, username, password, login_path)
                 if not ok:
-                    status("[-] HTTP login failed")
-                    log.warning("HTTP login failed")
-
+                    log.warning("HTTP login failed during session")
+                    continue
             except Exception:
-                status("[!] Session login failed")
                 log.debug("Session login failed", exc_info=True)
                 continue
             # Delay to not cause failures
             time.sleep(0.05 * (i + 1))
         sessPool.append(sess)
+
+    if auth and username and password and not sessPool:
+        log.warning("No authenticated sessions could be created")
     return sessPool

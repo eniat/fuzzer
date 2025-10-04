@@ -1,14 +1,13 @@
 import logging
 import threading
+
 from uuid import uuid4
 
-from uni_fuzzer.core.fuzzer_phases import FuzzerPhase, PhaseContext
-from uni_fuzzer.core.utility import status
-from uni_fuzzer.auth.auth import buildSessions
-from uni_fuzzer.fuzzers.xss_dom import DomXSSFuzzer
+from ..fuzzers.xss_dom import DomXSSFuzzer
+
+from ..phases.fuzzer_phases import FuzzerPhase, PhaseContext
 
 log = logging.getLogger(__name__)
-
 
 class DomXSSPhase(FuzzerPhase):
     """
@@ -38,15 +37,15 @@ class DomXSSPhase(FuzzerPhase):
         if not forms and not endpoints:
             return []
 
-        status(f"\n[+] Running Dom XSS on discovered forms/endpoints...\n")
+        ctx.runtime.util.status(f"\n[+] Running Dom XSS on discovered forms/endpoints...\n")
         domSessPool = []
         domSess = None
         try:
-            domSessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path,
-                                        desiredTasks=1,
-                                        threadsPerSess=1,
-                                        maxSess=1,
-                                        poolHeadroom=0
+            domSessPool = ctx.runtime.auth.build_sessions(args.auth, args.username, args.password, args.start_url, args.login_path,
+                                        desired_tasks=1,
+                                        threads_per_sess=1,
+                                        max_sess=1,
+                                        pool_headroom=0
                                         )
             domSess = domSessPool[0] if domSessPool else None
         except Exception:
@@ -63,7 +62,8 @@ class DomXSSPhase(FuzzerPhase):
                 loginPassword=args.password,
                 loginPath=args.login_path,
                 token=runToken,
-                bailEvent=bail
+                bailEvent=bail,
+                ctx=ctx.runtime
             )
 
             findings = xss_dom_fuzzer.run(ctx) or []

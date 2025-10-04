@@ -1,16 +1,16 @@
 import threading
 import logging
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urljoin
 from uuid import uuid4
 
-from uni_fuzzer.core.fuzzer_phases import FuzzerPhase, PhaseContext
-from uni_fuzzer.core.utility import status, getDirectories
-from uni_fuzzer.auth.auth import buildSessions
-from uni_fuzzer.fuzzers.xss_stored import StoredXSSFuzzer
-from uni_fuzzer.fuzzers.xss_form import FormXSSFuzzer
-from uni_fuzzer.fuzzers.sql_inj import InjSQLFuzzer
-from uni_fuzzer.fuzzers.sql_iblind import BlindSQLiFuzzer
+from ..fuzzers.xss_stored import StoredXSSFuzzer
+from ..fuzzers.xss_form import FormXSSFuzzer
+from ..fuzzers.sql_inj import InjSQLFuzzer
+from ..fuzzers.sql_iblind import BlindSQLiFuzzer
+
+from ..phases.fuzzer_phases import FuzzerPhase, PhaseContext
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +39,6 @@ class FormsPhase (FuzzerPhase):
         args = ctx.args
         cfg = ctx.cfg
         base = ctx.baseUrl
-        endpoints = ctx.endpoints
         forms = ctx.forms or []
         allVulns= []
 
@@ -70,7 +69,7 @@ class FormsPhase (FuzzerPhase):
             if self.run_xss_forms:
                 runToken = f"XSSCanary-{uuid4().hex[:8]}"
 
-                status(f"[Thread] XSS Form Fuzzing: {fullUrl}")
+                ctx.runtime.util.status(f"[Thread] XSS Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
                 xss_form_fuzzer = FormXSSFuzzer(
                     baseUrl=fullUrl,
@@ -78,7 +77,8 @@ class FormsPhase (FuzzerPhase):
                     session=sess,
                     auth=False,
                     token=runToken,
-                    bailEvent=bail
+                    bailEvent=bail,
+                    ctx=ctx.runtime
                 )
 
                 res = xss_form_fuzzer.run({"forms": [form]})
@@ -89,7 +89,7 @@ class FormsPhase (FuzzerPhase):
             if self.run_xss_stored:
                 runToken = f"XSSCanary-{uuid4().hex[:8]}"
 
-                status(f"[Thread] XSS Stored Fuzzing: {fullUrl}")
+                ctx.runtime.util.status(f"[Thread] XSS Stored Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
                 xss_stored_fuzzer = StoredXSSFuzzer(
                     baseUrl=fullUrl,
@@ -97,7 +97,8 @@ class FormsPhase (FuzzerPhase):
                     session=sess,
                     auth=False,
                     token=runToken,
-                    bailEvent=bail
+                    bailEvent=bail,
+                    ctx=ctx.runtime
                 )
 
                 res = xss_stored_fuzzer.run({"forms": [form]})
@@ -107,14 +108,15 @@ class FormsPhase (FuzzerPhase):
 
             if self.run_sqli:
 
-                status(f"[Thread] SQLi Form Fuzzing: {fullUrl}")
+                ctx.runtime.util.status(f"[Thread] SQLi Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
                 sqli_form_fuzzer = InjSQLFuzzer(
                     baseUrl=fullUrl,
                     wordlistPath=self.wordlistSqli,
                     session=sess,
                     auth=False,
-                    bailEvent=bail
+                    bailEvent=bail,
+                    ctx=ctx.runtime
                 )
 
                 res = sqli_form_fuzzer.run({"forms": [form]})
@@ -124,14 +126,15 @@ class FormsPhase (FuzzerPhase):
 
             if self.run_sqli_b:
 
-                status(f"[Thread] SQLi Blind Form Fuzzing: {fullUrl}")
+                ctx.runtime.util.status(f"[Thread] SQLi Blind Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
                 sqli_blind_fuzzer = BlindSQLiFuzzer(
                     baseUrl=fullUrl,
                     wordlistPath=self.wordlistSqli,
                     session=sess,
                     auth=False,
-                    bailEvent=bail
+                    bailEvent=bail,
+                    ctx=ctx.runtime
                 )
 
                 res = sqli_blind_fuzzer.run({"forms": [form]})
@@ -141,14 +144,14 @@ class FormsPhase (FuzzerPhase):
 
             return results
 
-        status(f"\n[+] Starting threaded fuzzing on discovered Forms... \n")
+        ctx.runtime.util.status(f"\n[+] Starting threaded fuzzing on discovered Forms... \n")
         sessPool = []
         try:
-            sessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path,
-                                     desiredTasks=len(forms),
-                                     threadsPerSess=cfg["concurrency"]["threads_per_session"],
-                                     maxSess=cfg["concurrency"].get("max_sessions_cap", None),
-                                     poolHeadroom=0.25
+            sessPool = ctx.runtime.auth.build_sessions(args.auth, args.username, args.password, args.start_url, args.login_path,
+                                     desired_tasks=len(forms),
+                                     threads_per_sess=cfg["concurrency"]["threads_per_session"],
+                                     max_sess=cfg["concurrency"].get("max_sessions_cap", None),
+                                     pool_headroom=0.25
                                      )
             log.debug("Session pool size=%d (phase=forms)", len(sessPool))
         except Exception:

@@ -1,14 +1,13 @@
-from __future__ import annotations
-
 import logging
 import re
-from functools import lru_cache
-from pathlib import Path, PurePosixPath
-from urllib.parse import urlparse, unquote
 import yaml
 import posixpath
 
-from uni_fuzzer.core.reporting import Finding
+from functools import lru_cache
+from pathlib import Path, PurePosixPath
+from urllib.parse import urlparse, unquote
+
+from ..core.reporting import Finding
 
 log = logging.getLogger(__name__)
 

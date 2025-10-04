@@ -6,20 +6,26 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 
 ## To‑Do List
 
-- [x] **Add bail after first hit option**  
-  Stop fuzzing once the first vulnerability is found for drastic speed-up.
+- [ ] **Remove imports of concrete classes**  
+  Remove the imports of my own concrete classes and make them go via an adapter/ interfaces / Services
 
-- [x] **Add JSON reporting**  
-  Structured output for easier parsing and CI integration.
+- [ ] **Add return/ parameters annotations to functions**  
+  Add return/ parameters annotations to functions to give greater understanding.
+
+- [ ] **Add a domain scope to target fuzzing**  
+  Add a scope that the crawlers and fuzzers stay inside for more refined fuzzing.
+
+- [ ] **Add tests**  
+  pytests folder that includes tests for multiple functions and the whole thing.
+
+- [ ] **Config validation**  
+  UIsing pydantic implement a config validation to make sure whats given is correct.
 
 - [ ] **Implement mutations**  
   Start and build custom mutation strategies.
 
 - [ ] **Improve CLI UX**  
   Add CLI art, loading animations, and progress bars.
-
-- [x] **Improve controller flow**  
-  Make the controller flow better and be more of a pluggable architecture.
 
 - [ ] **Explore OpenAI prompting**  
   Integrate LLM prompting depending on cost and time.
@@ -40,7 +46,9 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 ## Features
 
 - **Crawler-first workflow** (optional): discover endpoints and forms automatically.
-- **Path Traversal** fuzzer with recursion into live 200s and file/extension guards.
+- **Path** suite:
+  - fuzzer with recursion into live 200s and file/extension guards.
+  - param based fuzzer.
 - **XSS** suite:
   - Param & form reflected XSS (tokenized payloads, reflexivity probes)
   - Stored XSS (submit-then-revisit with settle window)

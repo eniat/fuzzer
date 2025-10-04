@@ -4,12 +4,12 @@ from urllib.parse import urlparse, quote, unquote_plus
 from uuid import uuid4
 from html import unescape
 
-from uni_fuzzer.core.base_fuzzer import AbstractFuzzer
-from uni_fuzzer.core.reporting import Finding
-from uni_fuzzer.auth.auth import  login
-from uni_fuzzer.fuzzers.detection import detectXSS
+from ..fuzzers.detection import detectXSS
 
-from uni_fuzzer.core.utility import loadWordlist, canary, status
+from ..runtime.context import AppContext
+from ..core.base_fuzzer import AbstractFuzzer
+from ..core.reporting import Finding
+
 log = logging.getLogger(__name__)
 
 class ParamXSSFuzzer(AbstractFuzzer):
@@ -17,14 +17,17 @@ class ParamXSSFuzzer(AbstractFuzzer):
         Fuzz query params for reflected XSS
     """
 
-    def __init__(self, baseUrl, wordlistPath=None,session=None, bailEvent=None, cfg=None,auth=False, loginUsername=None,loginPassword=None, loginPath=None, token=None, headers=None):
+    def __init__(self, baseUrl, wordlistPath=None,session=None, bailEvent=None, cfg=None,auth=False, loginUsername=None,loginPassword=None, loginPath=None, token=None, headers=None, ctx: AppContext | None = None):
         super().__init__(baseUrl=baseUrl, session=session, headers=headers, wordlistPath=wordlistPath, bailEvent=bailEvent, cfg=cfg)
+        self.ctx=ctx
+        if self.ctx is None:
+            raise ValueError("XSS Param Fuzzer requires an AppContext")
 
         if self.cfg["http"]["add_referer"]:
             self.headers["Referer"] = self.baseUrl
 
 
-        self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
+        self.payloads = self.ctx.util.load_wordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.token = token or f"XSSCanary-{uuid4().hex[:8]}"
         self.tokenB = self.token.encode("utf-8", errors="ignore")
 
@@ -41,17 +44,17 @@ class ParamXSSFuzzer(AbstractFuzzer):
 
         if self.auth and self.loginUsername and self.loginPassword:
             # Use the generic HTTP login in auth.py
-            ok = login(
+            ok = self.ctx.auth.http_login(
                 self.session,
-                baseUrl=self.baseUrl,
+                start_url=self.baseUrl,
                 username=self.loginUsername,
                 password=self.loginPassword,
-                loginPath=self.loginPath,
+                login_path=self.loginPath,
                 selectors=None,
                 headers=None
             )
             if not ok:
-                status("[!] HTTP login in XSSFuzzer failed")
+                self.ctx.util.status("[!] HTTP login in XSSFuzzer failed")
                 log.warning("HTTP login in XSSFuzzer failed")
 
     def prepare(self, ctx):
@@ -66,7 +69,7 @@ class ParamXSSFuzzer(AbstractFuzzer):
 
         # Only fuzz if fuzz in query
         if "FUZZ" not in parsed.query:
-            status("[-] No 'FUZZ' keyword found")
+            self.ctx.util.status("[-] No 'FUZZ' keyword found")
             log.info("No 'FUZZ' keyword found in query for %s", self.baseUrl)
             self.ready= True
             return
@@ -81,7 +84,7 @@ class ParamXSSFuzzer(AbstractFuzzer):
                 continue
 
             seen.add(raw)
-            marked = canary(raw, self.token)
+            marked = self.ctx.util.canary(raw, self.token)
             enc = quote(marked, safe="")
             self.prebuiltPayloads.append((raw, marked, enc))
 

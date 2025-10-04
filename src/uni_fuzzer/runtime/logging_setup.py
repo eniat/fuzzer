@@ -2,7 +2,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from uni_fuzzer.core.utility import get_cfg
+from ..core.utility import get_cfg
 cfg = get_cfg()
 
 def setupLogging (level="INFO", logFile= "Uni-fuzzer.log", toConsole=True, jsonMode =False, maxBytes=0, backUpCount=1):

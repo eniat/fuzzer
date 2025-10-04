@@ -1,17 +1,16 @@
 import logging
-from html import unescape
 
+from html import unescape
 from urllib.parse import urlparse, quote, unquote_plus, urljoin
 from uuid import uuid4
 
-from uni_fuzzer.core.base_fuzzer import AbstractFuzzer
-from uni_fuzzer.core.reporting import Finding
-from uni_fuzzer.core.probes import probeReflexivity
-from uni_fuzzer.auth.auth import login
-from uni_fuzzer.core.baseline import baselineForm
+from ..core.probes import probeReflexivity
+from ..core.baseline import baselineForm
+from ..fuzzers.detection import detectXSS
 
-from uni_fuzzer.core.utility import isFuzzableField, loadWordlist, autoSubmits, canary, status
-from uni_fuzzer.fuzzers.detection import detectXSS
+from ..runtime.context import AppContext
+from ..core.base_fuzzer import AbstractFuzzer
+from ..core.reporting import Finding
 
 log = logging.getLogger(__name__)
 
@@ -20,13 +19,16 @@ class FormXSSFuzzer(AbstractFuzzer):
         Takes the forms retrieved by the crawler and fuzzes them for reflected XSS
     """
 
-    def __init__(self, baseUrl, wordlistPath=None, session=None, bailEvent=None, cfg=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None, token=None, headers=None):
+    def __init__(self, baseUrl, wordlistPath=None, session=None, bailEvent=None, cfg=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None, token=None, headers=None, ctx: AppContext | None = None):
         super().__init__(baseUrl=baseUrl, session=session, headers=headers, wordlistPath=wordlistPath, bailEvent=bailEvent, cfg=cfg)
+        self.ctx = ctx
+        if self.ctx is None:
+            raise ValueError("XSS Form Fuzzer requires an AppContext")
 
         if self.cfg["http"]["add_referer"]:
             self.headers["Referer"] = self.baseUrl
 
-        self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
+        self.payloads = self.ctx.util.load_wordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.token = token or f"XSSCanary-{uuid4().hex[:8]}"
         self.tokenB = self.token.encode("utf-8", errors="ignore")
 
@@ -43,17 +45,17 @@ class FormXSSFuzzer(AbstractFuzzer):
 
         if self.auth and self.loginUsername and self.loginPassword:
             # Use the generic HTTP login in auth.py
-            ok = login(
+            ok = self.ctx.auth.http_login(
                 self.session,
-                baseUrl=self.baseUrl,
+                start_url=self.baseUrl,
                 username=self.loginUsername,
                 password=self.loginPassword,
-                loginPath=self.loginPath,
+                login_path=self.loginPath,
                 selectors=None,
                 headers=None
             )
             if not ok:
-                status("[!] HTTP login in XSSFuzzer failed")
+                self.ctx.util.status("[!] HTTP login in XSSFuzzer failed")
                 log.warning("HTTP login in XSSFuzzer failed")
 
 
@@ -74,7 +76,7 @@ class FormXSSFuzzer(AbstractFuzzer):
                 continue
 
             seen.add(raw)
-            marked = canary(raw, self.token)
+            marked = self.ctx.util.canary(raw, self.token)
             enc = quote(marked, safe="")
             self.prebuiltPayloads.append((raw, marked, enc))
 
@@ -118,7 +120,7 @@ class FormXSSFuzzer(AbstractFuzzer):
             if not url.startswith("http"):
                 url = f"{self.origin}{url}"
 
-            fuzzField = [f for f in fields if isFuzzableField(f)]
+            fuzzField = [f for f in fields if self.ctx.util.is_fuzzable_field(f)]
 
             if not fuzzField:
                 log.debug("No fuzzable fields for form %s", url)
@@ -145,7 +147,7 @@ class FormXSSFuzzer(AbstractFuzzer):
             if method == "POST":
                 # POST form fuzzing
                 baseD = {f: "test" for f in fields}
-                baseD = autoSubmits(baseHtml, baseD)
+                baseD = self.ctx.util.auto_submits(baseHtml, baseD)
                 for raw, marked, _enc in self.prebuiltPayloads:
                     # If bail on first then bail
                     if self.bailEvent and self.bailEvent.is_set():

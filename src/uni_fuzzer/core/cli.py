@@ -1,5 +1,6 @@
 import argparse
-from uni_fuzzer.core.controller import run
+
+from ..core.controller import run
 
 def buildParser():
 

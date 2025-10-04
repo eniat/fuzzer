@@ -2,11 +2,13 @@ import logging
 
 from urllib.parse import urljoin
 
-from uni_fuzzer.core.utility import get_cfg, autoSubmits
+from ..core.utility import get_cfg
+from ..runtime.ports import UtilService
 
 cfg = get_cfg()
-TIMING_BASELINE_PROBES = cfg["sqli"]["timing_baseline_probes"]
 log = logging.getLogger(__name__)
+
+TIMING_BASELINE_PROBES = cfg["sqli"]["timing_baseline_probes"]
 
 def baselineForm(session, url, headers):
     """
@@ -42,7 +44,7 @@ def getBaseline(session, baseUrl, headers):
         log.debug("getBaseline request failed for %s", testUrl, exc_info=True)
         return {"content": ""}
 
-def sqliBaseline( session, headers, endpoint, method, fields):
+def sqliBaseline( session, headers, endpoint, method, fields, util: "UtilService"):
     """
         Get baseline to compare if SQLi worked
     """
@@ -71,7 +73,7 @@ def sqliBaseline( session, headers, endpoint, method, fields):
             html = res.text or ""
 
             params = {f: "1" for f in fields}
-            params = autoSubmits(html, params)
+            params = util.auto_submits(html, params)
 
             res = session.get(
                 endpoint,
@@ -89,7 +91,7 @@ def sqliBaseline( session, headers, endpoint, method, fields):
         log.debug("sqliBaseline failed for %s %s", method, endpoint, exc_info=True)
         return "",0
 
-def getBlindBaseline(session, headers, endpoint, method, fields, probes=TIMING_BASELINE_PROBES):
+def getBlindBaseline(session, headers, endpoint, method, fields, util: "UtilService", probes=TIMING_BASELINE_PROBES):
     """
         Get time baseline for blind SQLi timing
     """
@@ -107,7 +109,7 @@ def getBlindBaseline(session, headers, endpoint, method, fields, probes=TIMING_B
             html = res.text or ""
 
             baseData = {f: "1" for f in fields}
-            baseData = autoSubmits(html, baseData)
+            baseData = util.auto_submits(html, baseData)
 
             for _ in range(max(1, int(probes))):
                 res = session.post(
@@ -131,7 +133,7 @@ def getBlindBaseline(session, headers, endpoint, method, fields, probes=TIMING_B
             html = res.text or ""
 
             params = {f: "1" for f in fields}
-            params = autoSubmits(html, params)
+            params = util.auto_submits(html, params)
 
             for _ in range(max(1, int(probes))):
                 res = session.get(

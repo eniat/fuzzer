@@ -2,23 +2,25 @@ import logging
 
 from urllib.parse import urlparse, quote
 
-from uni_fuzzer.core.base_fuzzer import AbstractFuzzer
-from uni_fuzzer.core.reporting import Finding
-from uni_fuzzer.auth.auth import login
-from uni_fuzzer.fuzzers.detection import detectSQLiBlind, detectSQLiDiff
-from uni_fuzzer.core.baseline import sqliBaseline, getBlindBaseline
-from uni_fuzzer.core.utility import isFuzzableField, loadWordlist, autoSubmits, isBlindPayload, buildBooleanPayloads, expandTimeToken, status
+from ..fuzzers.detection import detectSQLiBlind, detectSQLiDiff
+from ..core.baseline import sqliBaseline, getBlindBaseline
+
+from ..runtime.context import AppContext
+from ..core.base_fuzzer import AbstractFuzzer
+from ..core.reporting import Finding
 
 log = logging.getLogger(__name__)
-
 
 class BlindSQLiFuzzer(AbstractFuzzer):
     """
         Takes the forms retrieved by the crawler and fuzzes them for SQLi blind vulnerabilities
     """
 
-    def __init__(self, baseUrl, wordlistPath=None, session=None, bailEvent=None, cfg=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None, headers=None):
+    def __init__(self, baseUrl, wordlistPath=None, session=None, bailEvent=None, cfg=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None, headers=None, ctx: AppContext | None = None):
         super().__init__(baseUrl=baseUrl, session=session, headers=headers, wordlistPath=wordlistPath, bailEvent=bailEvent, cfg=cfg)
+        self.ctx=ctx
+        if self.ctx is None:
+            raise ValueError("Sqli Blind Fuzzer requires an AppContext")
 
         if self.cfg["http"]["add_referer"]:
             self.headers["Referer"] = self.baseUrl
@@ -29,14 +31,14 @@ class BlindSQLiFuzzer(AbstractFuzzer):
         self.loginPath = loginPath
         self.auth = auth
         if self.auth and self.loginUsername and self.loginPassword:
-            ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
+            ok = self.ctx.auth.http_login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
             if not ok:
-                status("[!] HTTP login in SQLi Fuzzer failed")
+                self.ctx.util.status("[!] HTTP login in SQLi Fuzzer failed")
                 log.warning("HTTP login in SQLi Fuzzer failed")
 
-        self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
+        self.payloads = self.ctx.util.load_wordlist(self.wordlistPath) if self.wordlistPath is not None else []
         # Build boolean true/False pairs
-        self.boolPairs = buildBooleanPayloads()
+        self.boolPairs = self.ctx.util.build_boolean_payloads()
 
         # Sort to make sure no duplicates
         self.boolPairs = list(dict.fromkeys(self.boolPairs))
@@ -84,7 +86,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
             if not url.startswith("http"):
                 url = f"{origin}{url}"
 
-            fuzzTargets = [f for f in fields if isFuzzableField(f)]
+            fuzzTargets = [f for f in fields if self.ctx.util.is_fuzzable_field(f)]
             if not fuzzTargets:
                 continue
 
@@ -94,7 +96,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
             seen.add(tkey)
 
             # Get a baseline for later comparisons
-            baseText, baseStatus = sqliBaseline(self.session, self.headers, url, method, fields)
+            baseText, baseStatus = sqliBaseline(self.session, self.headers, url, method, fields, util=self.ctx.util)
 
             self.targets.append({
                 "url": url,
@@ -148,7 +150,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
 
                     for field in fields:
                         # Inject into fuzzable fields the 1 plus a true condition and a false condition
-                        if isFuzzableField(field):
+                        if self.ctx.util.is_fuzzable_field(field):
                             dataTrue[field] = "1" + trueCond
                             dataFalse[field] = "1" + falseCond
 
@@ -156,8 +158,8 @@ class BlindSQLiFuzzer(AbstractFuzzer):
                             dataTrue[field] = "1"
                             dataFalse[field] = "1"
 
-                    dataTrue = autoSubmits(baseText, dataTrue)
-                    dataFalse = autoSubmits(baseText, dataFalse)
+                    dataTrue = self.ctx.util.auto_submits(baseText, dataTrue)
+                    dataFalse = self.ctx.util.auto_submits(baseText, dataFalse)
                     if doTrue:
                         boolBatch.append((
                             "POST", url, {"headers": self.headers, "data": dataTrue,
@@ -180,7 +182,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
 
                     for field in fields:
                         # Inject into fuzzable fields the 1 plus a true condition and a false condition
-                        if isFuzzableField(field):
+                        if self.ctx.util.is_fuzzable_field(field):
                             paramsTrue[field] = "1" + trueCond
                             paramsFalse[field] = "1" + falseCond
 
@@ -188,8 +190,8 @@ class BlindSQLiFuzzer(AbstractFuzzer):
                             paramsTrue[field] = "1"
                             paramsFalse[field] = "1"
 
-                    paramsTrue = autoSubmits(baseText, paramsTrue)
-                    paramsFalse = autoSubmits(baseText, paramsFalse)
+                    paramsTrue = self.ctx.util.auto_submits(baseText, paramsTrue)
+                    paramsFalse = self.ctx.util.auto_submits(baseText, paramsFalse)
 
                     # Contruct GET requests
                     logParamsT = [f"{k}={quote(str(v), safe='')}" for k, v in paramsTrue.items()]
@@ -222,7 +224,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
             return boolFindings
 
         # If there are no potential timing payloads skip
-        if not self.payloads or not any(isBlindPayload(payload) for payload in self.payloads):
+        if not self.payloads or not any(self.ctx.util.is_blind_payload(payload) for payload in self.payloads):
             return boolFindings
 
         # Sequentially fuzz for blind timing
@@ -236,7 +238,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
             url, method, fields = targ["url"], targ["method"], targ["fields"]
             baseText = targ["base_text"]
 
-            baselineMs = getBlindBaseline(self.session, self.headers, url, method, fields)
+            baselineMs = getBlindBaseline(self.session, self.headers, url, method, fields, util=self.ctx.util)
 
             if baselineMs <= 0.0:
                 continue
@@ -247,11 +249,11 @@ class BlindSQLiFuzzer(AbstractFuzzer):
                 if self.bailEvent and self.bailEvent.is_set():
                     break
 
-                if not isBlindPayload(raw):
+                if not self.ctx.util.is_blind_payload(raw):
                     continue
 
-                payload = expandTimeToken(raw)
-                targets = [f for f in fields if isFuzzableField(f)]
+                payload = self.ctx.util.expand_time_token(raw)
+                targets = [f for f in fields if self.ctx.util.is_fuzzable_field(f)]
                 if not targets:
                     continue
 
@@ -265,12 +267,12 @@ class BlindSQLiFuzzer(AbstractFuzzer):
                     if method == "POST":
                         # POST form fuzzing
                         data = {f: (payload if f == target else "1") for f in fields}
-                        data = autoSubmits(baseText, data)
+                        data = self.ctx.util.auto_submits(baseText, data)
 
                     else:
                         # GET form fuzzing
                         params = {f: (payload if f == target else "1") for f in fields}
-                        params = autoSubmits(baseText, params)
+                        params = self.ctx.util.auto_submits(baseText, params)
 
                     # Run multiple trials to get more accurate reading
                     trialElapses = []
@@ -313,13 +315,13 @@ class BlindSQLiFuzzer(AbstractFuzzer):
 
             # Check previous hits again serially to stop other payloads having a domino effect
             if confirmJobs:
-                    confirmBaseMs = getBlindBaseline(self.session, self.headers, url, method, fields, probes=self.TIMING_CONFIRM_PROBES) or baselineMs
+                    confirmBaseMs = getBlindBaseline(self.session, self.headers, url, method, fields, probes=self.TIMING_CONFIRM_PROBES, util=self.ctx.util) or baselineMs
                     for (target, payload) in confirmJobs:
                         try:
                             if method == "POST":
                                 # POST form fuzzing
                                 data = {f: (payload if f == target else "1") for f in fields}
-                                data = autoSubmits(baseText, data)
+                                data = self.ctx.util.auto_submits(baseText, data)
 
                                 res = self.session.post(
                                     url,
@@ -332,7 +334,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
                             else:
                                 # GET form fuzzing
                                 params = {f: (payload if f == target else "1") for f in fields}
-                                params = autoSubmits(baseText, params)
+                                params = self.ctx.util.auto_submits(baseText, params)
 
                                 res = self.session.get(
                                     url,

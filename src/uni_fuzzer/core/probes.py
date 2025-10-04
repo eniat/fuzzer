@@ -2,8 +2,9 @@ import logging
 from html import unescape
 from urllib.parse import quote
 
-from uni_fuzzer.core.utility import get_cfg
-from uni_fuzzer.fuzzers.detection import detectSQLiDiff
+from ..fuzzers.detection import detectSQLiDiff
+
+from ..core.utility import get_cfg
 
 cfg = get_cfg()
 log = logging.getLogger(__name__)

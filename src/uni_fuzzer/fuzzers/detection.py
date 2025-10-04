@@ -1,10 +1,11 @@
 import re
 import logging
+
 from difflib import SequenceMatcher
 from urllib.parse import unquote_plus
 from html import escape, unescape
 
-from uni_fuzzer.core.utility import get_cfg
+from ..core.utility import get_cfg
 
 cfg = get_cfg()
 log = logging.getLogger(__name__)

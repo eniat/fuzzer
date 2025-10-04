@@ -1,6 +1,7 @@
 import requests
 import time
 import logging
+
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions
 from selenium import webdriver
@@ -11,16 +12,18 @@ from urllib.parse import urljoin, urlparse, parse_qs, urldefrag
 from requests.cookies import RequestsCookieJar
 from requests.adapters import HTTPAdapter
 
-from uni_fuzzer.auth.auth import seleniumLogin, login
+from ..runtime.context import AppContext
+from ..core.utility import get_cfg
 
-from uni_fuzzer.core.utility import get_cfg, extractIdentifier, status
 cfg = get_cfg()
-
 log = logging.getLogger(__name__)
 
 class Crawler:
 
-    def __init__(self, mode=None, maxPages=None, rateLimit=None, headless=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None):
+    def __init__(self, mode=None, maxPages=None, rateLimit=None, headless=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None, ctx: AppContext | None = None):
+        self.ctx = ctx
+        if self.ctx is None:
+            raise ValueError("Crawler requires an AppContext")
         # Crawler settings
         self.mode = mode or cfg["crawler"]["mode_default"]
         self.maxPages = maxPages if maxPages is not None else cfg["crawler"]["max_pages_default"]
@@ -61,7 +64,7 @@ class Crawler:
         domain = urlparse(startUrl).netloc
 
         if self.auth and self.loginUsername and self.loginPassword and self.mode in ("static", "both"):
-            ok = login(
+            ok = self.ctx.auth.http_login(
                 self.session,
                 startUrl,
                 self.loginUsername,
@@ -69,7 +72,7 @@ class Crawler:
                 self.loginPath
             )
             if not ok:
-                status("[!] HTTP login failed"); log.warning("HTTP login failed")
+                self.ctx.util.status("[!] HTTP login failed"); log.warning("HTTP login failed")
 
         # Static Crawl, if either the mode is static or both
         if self.mode in ('static', 'both'):
@@ -225,7 +228,7 @@ class Crawler:
                 # Get clean identifiers
                 fields = []
                 for inp in form.find_all(['input', 'textarea', 'select']):
-                    identifier = extractIdentifier(inp)
+                    identifier = self.ctx.util.extract_identifier(inp)
                     if identifier:
                         fields.append(identifier)
 
@@ -379,15 +382,15 @@ class Crawler:
         # Selenium login
         if self.auth and self.loginUsername and self.loginPassword:
 
-            ok = seleniumLogin(
+            ok = self.ctx.auth.selenium_login(
                 driver,
-                baseUrl=startUrl,
+                base_url=startUrl,
                 username=self.loginUsername,
                 password=self.loginPassword,
-                loginPath=self.loginPath
+                login_path=self.loginPath
             )
             if not ok:
-                status("[!] Selenium login failed"); log.warning("Selenium login failed")
+                self.ctx.util.status("[!] Selenium login failed"); log.warning("Selenium login failed")
             else:
                 # Copies cookies into Cookie Jar
                 jar = RequestsCookieJar()
@@ -471,7 +474,7 @@ class Crawler:
                         el.find_element(By.XPATH, "ancestor::form")
 
                     except Exception:
-                        identifier = extractIdentifier(el)
+                        identifier = self.ctx.util.extract_identifier(el)
                         if identifier:
                             freeFields.append(identifier)
 
@@ -507,7 +510,7 @@ class Crawler:
 
                     fields = []
                     for el in (inputs + textareas + selects):
-                        identifier = extractIdentifier(el)
+                        identifier = self.ctx.util.extract_identifier(el)
                         if identifier:
                             fields.append(identifier)
 
@@ -537,15 +540,17 @@ class Crawler:
                     time.sleep(self.rateLimit)
 
         finally:
-            driver.quit()
+            try:
+                driver.quit()
+            except Exception:
+                log.debug("driver.quit() failed", exc_info=True)
+            # Convert set of tuples to list of dics
+            endpointDicts = []
+            for path, method, params in dynamicEndpoints:
+                endpointDicts.append({
+                    "url": path,
+                    "method": method,
+                    "params": list(params)
+                })
 
-        # Convert set of tuples to list of dics
-        endpointDicts = []
-        for path, method, params in dynamicEndpoints:
-            endpointDicts.append({
-                "url": path,
-                "method": method,
-                "params": list(params)
-            })
-
-        return endpointDicts, dynamicForms
+            return endpointDicts, dynamicForms

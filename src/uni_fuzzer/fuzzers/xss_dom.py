@@ -7,13 +7,12 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from requests.cookies import RequestsCookieJar
 
-from uni_fuzzer.core.base_fuzzer import AbstractFuzzer
-from uni_fuzzer.core.reporting import Finding
-from uni_fuzzer.core.probes import probeDom
-from uni_fuzzer.auth.auth import seleniumLogin, login
-from uni_fuzzer.fuzzers.detection import detectXSS
+from ..core.probes import probeDom
+from ..fuzzers.detection import detectXSS
 
-from uni_fuzzer.core.utility import status
+from ..runtime.context import AppContext
+from ..core.base_fuzzer import AbstractFuzzer
+from ..core.reporting import Finding
 
 log = logging.getLogger(__name__)
 
@@ -22,8 +21,11 @@ class DomXSSFuzzer(AbstractFuzzer):
         Submits payload via query then loads and checks JS for payload
     """
 
-    def __init__(self, baseUrl, session=None, bailEvent=None, cfg=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None, token=None, headers=None, headless=True):
+    def __init__(self, baseUrl, session=None, bailEvent=None, cfg=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None, token=None, headers=None, headless=True, ctx: AppContext | None = None):
         super().__init__(baseUrl=baseUrl, session=session, headers=headers, bailEvent=bailEvent, cfg=cfg)
+        self.ctx = ctx
+        if self.ctx is None:
+            raise ValueError("XSS Dom Fuzzer requires an AppContext")
 
         if self.cfg["http"]["add_referer"]:
             self.headers["Referer"] = self.baseUrl
@@ -44,17 +46,17 @@ class DomXSSFuzzer(AbstractFuzzer):
 
         if self.auth and self.loginUsername and self.loginPassword:
             # Use the generic HTTP login in auth.py
-            ok = login(
+            ok = self.ctx.auth.http_login(
                 self.session,
-                baseUrl=self.baseUrl,
+                start_url=self.baseUrl,
                 username=self.loginUsername,
                 password=self.loginPassword,
-                loginPath=self.loginPath,
+                login_path=self.loginPath,
                 selectors=None,
                 headers=None
             )
             if not ok:
-                status("[!] HTTP login in XSSFuzzer failed")
+                self.ctx.util.status("[!] HTTP login in XSSFuzzer failed")
                 log.warning("HTTP login in XSSFuzzer failed")
 
 
@@ -205,15 +207,15 @@ class DomXSSFuzzer(AbstractFuzzer):
             if self.auth:
                 baseForLogin = f"{parsed.scheme}://{parsed.netloc}"
 
-                if not seleniumLogin(
+                if not self.ctx.auth.selenium_login(
                         driver,
-                        baseUrl=baseForLogin,
+                        base_url=baseForLogin,
                         username=self.loginUsername,
                         password=self.loginPassword,
-                        loginPath=self.loginPath,
+                        login_path=self.loginPath,
                         selectors=None
                 ):
-                    status("[!] Selenium login failed")
+                    self.ctx.util.status("[!] Selenium login failed")
                     log.warning("Selenium login failed during domXSS")
                     return []
 

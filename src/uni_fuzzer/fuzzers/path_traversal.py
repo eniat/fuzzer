@@ -3,27 +3,30 @@ import logging
 from urllib.parse import urlparse
 from pathlib import PurePosixPath
 
-from uni_fuzzer.core.base_fuzzer import AbstractFuzzer
-from uni_fuzzer.core.reporting import Finding
-from uni_fuzzer.fuzzers.detection import detectPathTraversal
-from uni_fuzzer.core.baseline import getBaseline
-from uni_fuzzer.auth.auth import login
-from uni_fuzzer.core.utility import get_cfg, loadWordlist, status
-cfg = get_cfg()
+from ..fuzzers.detection import detectPathTraversal
+from ..core.baseline import getBaseline
+
+from ..runtime.context import AppContext
+from ..core.base_fuzzer import AbstractFuzzer
+from ..core.reporting import Finding
 
 log = logging.getLogger(__name__)
+
 
 class TraversalPathFuzzer(AbstractFuzzer):
     """
         Fuzz the URL path using the payload
     """
 
-    def __init__(self, baseUrl, wordlistPath=None, maxDepth=None, loginUsername=None, loginPassword=None,loginPath=None, session=None, auth=None, bailEvent=None):
+    def __init__(self, baseUrl, wordlistPath=None, maxDepth=None, loginUsername=None, loginPassword=None,loginPath=None, session=None, auth=None, bailEvent=None,cfg=None, ctx: AppContext | None = None):
 
         super().__init__(baseUrl=baseUrl, session=session, wordlistPath=wordlistPath, bailEvent=bailEvent, cfg=cfg)
+        self.ctx = ctx
+        if self.ctx is None:
+            raise ValueError("Path Fuzzer requires an AppContext")
 
         self.maxDepth =  maxDepth if maxDepth is not None else self.cfg["fuzz"]["max_depth_default"]
-        self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
+        self.payloads = self.ctx.util.load_wordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.auth = auth
         self.loginUsername = loginUsername
         self.loginPassword = loginPassword
@@ -44,9 +47,9 @@ class TraversalPathFuzzer(AbstractFuzzer):
         self.excludedExtensions = self.cfg["fuzz"]["excluded_extensions"]
 
         if self.auth and self.loginUsername and self.loginPassword:
-            ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
+            ok = self.ctx.auth.http_login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
             if not ok :
-                status("[!] HTTP login in TraversalPathFuzzer  failed")
+                self.ctx.util.status("[!] HTTP login in TraversalPathFuzzer  failed")
                 log.warning("HTTP login in TraversalPathFuzzer  failed")
 
         self.baseline = None

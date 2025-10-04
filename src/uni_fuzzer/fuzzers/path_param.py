@@ -1,14 +1,14 @@
 import threading
 import logging
+
 from urllib.parse import urlparse, quote
 
-from uni_fuzzer.core.base_fuzzer import AbstractFuzzer
-from uni_fuzzer.core.reporting import Finding
-from uni_fuzzer.fuzzers.detection import detectPathTraversal
-from uni_fuzzer.core.baseline import getBaseline
-from uni_fuzzer.auth.auth import login
-from uni_fuzzer.core.utility import get_cfg, loadWordlist, status
-cfg = get_cfg()
+from ..fuzzers.detection import detectPathTraversal
+from ..core.baseline import getBaseline
+
+from ..runtime.context import AppContext
+from ..core.base_fuzzer import AbstractFuzzer
+from ..core.reporting import Finding
 
 log = logging.getLogger(__name__)
 
@@ -17,11 +17,14 @@ class ParamPathFuzzer(AbstractFuzzer):
         Fuzz query params
     """
 
-    def __init__(self, baseUrl, wordlistPath=None, loginUsername=None, loginPassword=None,loginPath=None, session=None, auth=None, bailEvent=None):
+    def __init__(self, baseUrl, wordlistPath=None, loginUsername=None, loginPassword=None,loginPath=None, session=None, auth=None, bailEvent=None,cfg=None, ctx: AppContext | None = None):
 
         super().__init__(baseUrl=baseUrl, session=session, wordlistPath=wordlistPath, bailEvent=bailEvent, cfg=cfg)
+        self.ctx = ctx
+        if self.ctx is None:
+            raise ValueError("Param Fuzzer requires an AppContext")
 
-        self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
+        self.payloads = self.ctx.util.load_wordlist(self.wordlistPath) if self.wordlistPath is not None else []
         self.auth = auth
         self.loginUsername = loginUsername
         self.loginPassword = loginPassword
@@ -36,9 +39,9 @@ class ParamPathFuzzer(AbstractFuzzer):
             self.headers["Referer"] = self.baseUrl
 
         if self.auth and self.loginUsername and self.loginPassword:
-            ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
+            ok = self.ctx.auth.http_login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
             if not ok :
-                status("[!] HTTP login in ParamPathFuzzer  failed")
+                self.ctx.util.status("[!] HTTP login in ParamPathFuzzer  failed")
                 log.warning("HTTP login in ParamPathFuzzer  failed")
 
         self.baseline = None
@@ -56,7 +59,7 @@ class ParamPathFuzzer(AbstractFuzzer):
         parsed = urlparse(self.baseUrl)
 
         if "FUZZ" not in parsed.query:
-            status("[-] No 'FUZZ' keyword found")
+            self.ctx.util.status("[-] No 'FUZZ' keyword found")
             return []
 
         if not self.payloads:

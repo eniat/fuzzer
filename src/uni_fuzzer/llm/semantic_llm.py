@@ -1,11 +1,10 @@
 import logging
-from sentence_transformers import SentenceTransformer, util
 
-from uni_fuzzer.core.utility import status
+from sentence_transformers import SentenceTransformer, util as sUtil
 
 log = logging.getLogger(__name__)
 
-def filterML(wordlistPath, prompt, similarityThreshold=0.25):
+def filterML(wordlistPath, prompt, similarityThreshold=0.25, util=None):
     """
         Filter a wordlist using semantic similarity to a prompt.
     """
@@ -16,7 +15,7 @@ def filterML(wordlistPath, prompt, similarityThreshold=0.25):
 
     except Exception:
         log.debug("filterML: failed to read wordlist from %s", wordlistPath, exc_info=True)
-        status("[-] Failed to read wordlist")
+        util.status("[-] Failed to read wordlist")
         raise
 
     if not payloads:
@@ -31,7 +30,7 @@ def filterML(wordlistPath, prompt, similarityThreshold=0.25):
     payloadEnc = model.encode(payloads, convert_to_tensor=True)
 
     # Compute similarity
-    similarities = util.cos_sim(promptEnc, payloadEnc)[0]
+    similarities = sUtil.cos_sim(promptEnc, payloadEnc)[0]
 
     # Filter payloads
     filtered = [payloads[i] for i in range(len(payloads)) if similarities[i] > similarityThreshold]

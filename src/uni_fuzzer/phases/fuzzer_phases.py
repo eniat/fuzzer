@@ -1,7 +1,10 @@
 import logging
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List
+
+from ..runtime.context import AppContext
 
 @dataclass
 class PhaseContext:
@@ -13,6 +16,7 @@ class PhaseContext:
     baseUrl: str
     shared: Dict[str, Any]
     log: logging.Logger
+    runtime: AppContext | None = None
 
 class FuzzerPhase(ABC):
     """

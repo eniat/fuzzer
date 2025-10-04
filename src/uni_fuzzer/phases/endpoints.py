@@ -5,12 +5,11 @@ from urllib.parse import urlparse, urljoin
 from pathlib import PurePosixPath
 from uuid import uuid4
 
-from uni_fuzzer.core.fuzzer_phases import FuzzerPhase, PhaseContext
-from uni_fuzzer.core.utility import status, getParents, getDirectories
-from uni_fuzzer.auth.auth import buildSessions
-from uni_fuzzer.fuzzers.path_traversal import TraversalPathFuzzer
-from uni_fuzzer.fuzzers.path_param import ParamPathFuzzer
-from uni_fuzzer.fuzzers.xss_param import ParamXSSFuzzer
+from ..fuzzers.path_traversal import TraversalPathFuzzer
+from ..fuzzers.path_param import ParamPathFuzzer
+from ..fuzzers.xss_param import ParamXSSFuzzer
+
+from ..phases.fuzzer_phases import FuzzerPhase, PhaseContext
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ class EndpointsPhase (FuzzerPhase):
             uniqueUrl = {}
             for enp in ctx.endpoints:
                 parsedPat = urlparse(enp["url"]).path or "/"
-                baseDire = str(PurePosixPath(getDirectories(parsedPat))).rstrip("/")
+                baseDire = str(PurePosixPath(ctx.runtime.util.get_directories(parsedPat))).rstrip("/")
 
                 if baseDire not in uniqueUrl:
                     uniqueUrl[baseDire] = enp
@@ -56,7 +55,7 @@ class EndpointsPhase (FuzzerPhase):
         # Update visited
         for epoi in ctx.shared["phaseEndpoints"]:
             pa = urlparse(epoi["url"]).path or "/"
-            di = getDirectories(pa)
+            di = ctx.runtime.util.get_directories(pa)
             ctx.shared["globalVisitedPaths"].add(di)
 
 
@@ -99,7 +98,7 @@ class EndpointsPhase (FuzzerPhase):
             if self.run_paths:
 
                 # Path traversal fuzzing
-                status(f"[Thread] Path Fuzzing: {fullUrl}")
+                ctx.runtime.util.status(f"[Thread] Path Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
 
                 path_fuzzer = TraversalPathFuzzer(
@@ -107,13 +106,14 @@ class EndpointsPhase (FuzzerPhase):
                     wordlistPath= self.wordlistPathsParams,
                     session=sess,
                     auth=False,
-                    bailEvent=bail
+                    bailEvent=bail,
+                    ctx=ctx.runtime
                 )
                 path_fuzzer.visitedPaths = ctx.shared["globalVisitedPaths"]
                 path_fuzzer.visitedFuzzPaths = ctx.shared["globalVisitedFuzzPaths"]
                 path_fuzzer.lock = ctx.shared["globalVisitedLock"]
 
-                for path in getParents(urlparse(fullUrl).path):
+                for path in ctx.runtime.util.get_parents(urlparse(fullUrl).path):
                     path_fuzzer.run(path=path)
 
                 if path_fuzzer.vulnerablePaths:
@@ -131,7 +131,7 @@ class EndpointsPhase (FuzzerPhase):
                 fuzzQuery = "&".join([f"{p}=FUZZ" for p in params])
                 fuzzedUrl = f"{fullUrl}?{fuzzQuery}" if "?" not in fullUrl else f"{fullUrl}&{fuzzQuery}"
 
-                status(f"[Thread] Param Fuzzing: {fuzzedUrl}")
+                ctx.runtime.util.status(f"[Thread] Param Fuzzing: {fuzzedUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
 
                 param_fuzzer = ParamPathFuzzer(
@@ -139,7 +139,8 @@ class EndpointsPhase (FuzzerPhase):
                     wordlistPath=self.wordlistPathsParams,
                     session=sess,
                     auth=False,
-                    bailEvent=bail
+                    bailEvent=bail,
+                    ctx=ctx.runtime
                 )
 
                 res = param_fuzzer.run()
@@ -153,7 +154,7 @@ class EndpointsPhase (FuzzerPhase):
                 fuzzQuery = "&".join([f"{p}=FUZZ" for p in params])
                 fuzzedUrl = f"{fullUrl}?{fuzzQuery}" if "?" not in fullUrl else f"{fullUrl}&{fuzzQuery}"
 
-                status(f"[Thread] XSS Param Fuzzing: {fuzzedUrl}")
+                ctx.runtime.util.status(f"[Thread] XSS Param Fuzzing: {fuzzedUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
 
                 xss_param_fuzzer = ParamXSSFuzzer(
@@ -162,7 +163,8 @@ class EndpointsPhase (FuzzerPhase):
                     session=sess,
                     auth=False,
                     token=runToken,
-                    bailEvent=bail
+                    bailEvent=bail,
+                    ctx=ctx.runtime
                 )
 
                 res = xss_param_fuzzer.run()
@@ -172,14 +174,14 @@ class EndpointsPhase (FuzzerPhase):
 
             return results
 
-        status(f"\n[+] Starting threaded fuzzing on discovered endpoints... \n")
+        ctx.runtime.util.status(f"\n[+] Starting threaded fuzzing on discovered endpoints... \n")
         sessPool = []
         try:
-            sessPool = buildSessions(args.auth, args.username, args.password, args.start_url, args.login_path,
-                                     desiredTasks=len(endpoints),
-                                     threadsPerSess=cfg["concurrency"]["threads_per_session"],
-                                     maxSess=cfg["concurrency"].get("max_sessions_cap", None),
-                                     poolHeadroom=0.25
+            sessPool = ctx.runtime.auth.build_sessions(args.auth, args.username, args.password, args.start_url, args.login_path,
+                                     desired_tasks=len(endpoints),
+                                     threads_per_sess=cfg["concurrency"]["threads_per_session"],
+                                     max_sess=cfg["concurrency"].get("max_sessions_cap", None),
+                                     pool_headroom=0.25
                                      )
             log.debug("Session pool size=%d (phase=endpoints)", len(sessPool))
         except Exception:

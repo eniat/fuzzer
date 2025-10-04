@@ -2,13 +2,13 @@ import logging
 
 from urllib.parse import urlparse, quote
 
-from uni_fuzzer.core.base_fuzzer import AbstractFuzzer
-from uni_fuzzer.core.reporting import Finding
-from uni_fuzzer.core.probes import probeReactivity
-from uni_fuzzer.auth.auth import login
-from uni_fuzzer.fuzzers.detection import detectSQLiDiff, detectSQLError
-from uni_fuzzer.core.baseline import sqliBaseline
-from uni_fuzzer.core.utility import isFuzzableField, loadWordlist, autoSubmits, status
+from ..core.probes import probeReactivity
+from ..fuzzers.detection import detectSQLiDiff, detectSQLError
+from ..core.baseline import sqliBaseline
+
+from ..runtime.context import AppContext
+from ..core.base_fuzzer import AbstractFuzzer
+from ..core.reporting import Finding
 
 log = logging.getLogger(__name__)
 
@@ -17,8 +17,11 @@ class ParamSQLFuzzer(AbstractFuzzer):
         Takes the endpoints retrieved by the crawler and fuzzes them for SQLi vulnerabilities
     """
 
-    def __init__(self, baseUrl, wordlistPath=None, session=None, bailEvent=None, cfg=None, auth=False,loginUsername=None, loginPassword=None, loginPath=None,headers=None):
+    def __init__(self, baseUrl, wordlistPath=None, session=None, bailEvent=None, cfg=None, auth=False,loginUsername=None, loginPassword=None, loginPath=None,headers=None, ctx: AppContext | None = None):
         super().__init__(baseUrl=baseUrl, session=session, headers=headers, wordlistPath=wordlistPath,bailEvent=bailEvent, cfg=cfg)
+        self.ctx = ctx
+        if self.ctx is None:
+            raise ValueError("Sqli Param Fuzzer requires an AppContext")
 
         if self.cfg["http"]["add_referer"]:
             self.headers["Referer"] = self.baseUrl
@@ -29,12 +32,12 @@ class ParamSQLFuzzer(AbstractFuzzer):
         self.loginPath = loginPath
         self.auth = auth
         if self.auth and self.loginUsername and self.loginPassword:
-            ok = login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
+            ok = self.ctx.auth.http_login(self.session, self.baseUrl, self.loginUsername, self.loginPassword, self.loginPath)
             if not ok:
-                status("[!] HTTP login in SQLi Fuzzer failed")
+                self.ctx.util.status("[!] HTTP login in SQLi Fuzzer failed")
                 log.warning("HTTP login in SQLi Fuzzer failed")
 
-        self.payloads = loadWordlist(self.wordlistPath) if self.wordlistPath is not None else []
+        self.payloads = self.ctx.util.load_wordlist(self.wordlistPath) if self.wordlistPath is not None else []
 
         self.MAX_SAMPLES_PER_GROUP = self.cfg["sqli"]["max_samples_per_group"]
 
@@ -78,7 +81,7 @@ class ParamSQLFuzzer(AbstractFuzzer):
             # Fields are the param keys
             fields = params[:]
 
-            fuzzTargets = [f for f in fields if isFuzzableField(f)]
+            fuzzTargets = [f for f in fields if self.ctx.util.is_fuzzable_field(f)]
             if not fuzzTargets:
                 continue
 
@@ -137,7 +140,7 @@ class ParamSQLFuzzer(AbstractFuzzer):
                     if method == "POST":
                         # POST param fuzzing
                         data = {f: (raw if f == target else "1") for f in fields}
-                        data = autoSubmits(baseText, data)
+                        data = self.ctx.util.auto_submits(baseText, data)
                         meta = {
                             "url": url, "method": "POST", "target": target, "payload": raw,
                             "base_text": baseText, "base_status": baseStatus
@@ -150,7 +153,7 @@ class ParamSQLFuzzer(AbstractFuzzer):
                     else:
                         # GET param fuzzing
                         params = {f: (raw if f == target else "1") for f in fields}
-                        params = autoSubmits(baseText, params)
+                        params = self.ctx.util.auto_submits(baseText, params)
 
                         # Contruct GET requests
                         logParams = [f"{k}={quote(str(v), safe='')}" for k, v in params.items()]

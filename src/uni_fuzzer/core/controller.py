@@ -1,24 +1,32 @@
-from urllib.parse import urlparse
-from uuid import uuid4
 import logging
 
-from uni_fuzzer.core.fuzzer_phases import PhaseContext
-from uni_fuzzer.phases.endpoints import EndpointsPhase
-from uni_fuzzer.phases.forms import FormsPhase
-from uni_fuzzer.phases.dom import DomXSSPhase
-from uni_fuzzer.core.logging_setup import setupLogging
-from uni_fuzzer.crawler.crawler import Crawler
-from uni_fuzzer.fuzzers.path_traversal import TraversalPathFuzzer
-from uni_fuzzer.fuzzers.path_param import ParamPathFuzzer
-from uni_fuzzer.llm.semantic_llm import filterML
-from uni_fuzzer.fuzzers.xss_param import ParamXSSFuzzer
-from uni_fuzzer.core.reporting import crawlerPrint, fuzzerPrint, crawlerJson, fuzzerJson
-from uni_fuzzer.core.utility import get_cfg, isFuzzableField, collapseDuplicates, sortWordlist, getParents, status
-cfg = get_cfg()
+from urllib.parse import urlparse
+
+from ..crawler.crawler import Crawler
+from ..fuzzers.path_traversal import TraversalPathFuzzer
+from ..fuzzers.path_param import ParamPathFuzzer
+from ..llm.semantic_llm import filterML
+from ..fuzzers.xss_param import ParamXSSFuzzer
+from ..core.reporting import crawlerPrint, fuzzerPrint, crawlerJson, fuzzerJson
+
+from ..core.utility import get_cfg
+from ..adapters.auth_default import DefaultAuth
+from ..adapters.util_default import DefaultUtil
+from ..runtime.context import AppContext
+from ..phases.fuzzer_phases import PhaseContext
+from ..phases.endpoints import EndpointsPhase
+from ..phases.forms import FormsPhase
+from ..phases.dom import DomXSSPhase
+from ..runtime.logging_setup import setupLogging
 
 log = logging.getLogger(__name__)
 
+def build_ctx(args) -> AppContext:
+    util = DefaultUtil()
+    return AppContext(auth=DefaultAuth(util=util), util=util, cfg= get_cfg(),args=args)
+
 def run(args):
+    appCtx = build_ctx(args)
 
     if args.log:
         setupLogging(
@@ -29,26 +37,15 @@ def run(args):
             maxBytes=6_500_000,
             backUpCount=3)
 
-    status("Starting run")
+    appCtx.util.status("Starting run")
 
     if args.wordlist:
-        args.wordlist = sortWordlist(args.wordlist)
+        args.wordlist = appCtx.util.sort_wordlist(args.wordlist)
 
     # Specific wordlists
-    if args.pwordlist:
-        pWordlist = sortWordlist(args.pwordlist)
-    else:
-        pWordlist = None
-
-    if args.xwordlist:
-        xWordlist = sortWordlist(args.xwordlist)
-    else:
-        xWordlist = None
-
-    if args.swordlist:
-        sWordlist = sortWordlist(args.swordlist)
-    else:
-        sWordlist = None
+    pWordlist = appCtx.util.sort_wordlist(args.pwordlist) if args.pwordlist else None
+    xWordlist = appCtx.util.sort_wordlist(args.xwordlist) if args.xwordlist else None
+    sWordlist = appCtx.util.sort_wordlist(args.swordlist) if args.swordlist else None
 
     # Checks if wordlist given or falls back to base
     wordlistPathsParams = pWordlist or args.wordlist
@@ -57,17 +54,17 @@ def run(args):
 
     # if --llm is used wordlist needs to be provided
     if args.llm and not args.wordlist:
-        status("[-] You must provide --wordlist when using --llm.")
+        appCtx.util.status("[-] You must provide --wordlist when using --llm.")
         return
 
     # If using the llm takes the wordlist and filters it based on the prompt
     if args.llm:
         try:
-            status(f"[+]Filtering wordlist using LLM prompt:'{args.llm}'")
-            filtered = filterML(args.wordlist, args.llm, similarityThreshold=0.4)
+            appCtx.util.status(f"[+]Filtering wordlist using LLM prompt:'{args.llm}'")
+            filtered = filterML(args.wordlist, args.llm, similarityThreshold=0.4, util=appCtx.util)
 
             if not filtered:
-                status("[-] No payloads matched the LLM prompt")
+                appCtx.util.status("[-] No payloads matched the LLM prompt")
                 return
 
             args.wordlist = filtered
@@ -79,10 +76,10 @@ def run(args):
             if not sWordlist:
                 wordlistSqli = args.wordlist
 
-            status(f"[+] {len(filtered)} payloads remain after filtering.\n")
+            appCtx.util.status(f"[+] {len(filtered)} payloads remain after filtering.\n")
 
         except Exception:
-            status("[!] Failed to apply LLM filtering")
+            appCtx.util.status("[!] Failed to apply LLM filtering")
             log.debug("Failed to apply LLM filtering", exc_info=True)
             return
 
@@ -105,7 +102,8 @@ def run(args):
             auth= args.auth,
             loginUsername = args.username,
             loginPassword = args.password,
-            loginPath = args.login_path
+            loginPath = args.login_path,
+            ctx=appCtx
         )
 
 
@@ -120,7 +118,7 @@ def run(args):
 
         allVulnerabilities = []
 
-        status("\n[+] Using crawler to discover endpoints and forms...")
+        appCtx.util.status("\n[+] Using crawler to discover endpoints and forms...")
 
         crawler = Crawler(
             mode= args.crawler_mode,
@@ -130,7 +128,8 @@ def run(args):
             auth=args.auth,
             loginUsername=args.username,
             loginPassword=args.password,
-            loginPath=args.login_path
+            loginPath=args.login_path,
+            ctx=appCtx
         )
         endpoints, forms = crawler.crawl(args.start_url)
 
@@ -142,12 +141,12 @@ def run(args):
 
         filteredForms  = [
             f for f in forms
-            if any(isFuzzableField(field) for field in f.get("formFields", []))
+            if any(appCtx.util.is_fuzzable_field(field) for field in f.get("formFields", []))
         ]
 
         if not endpoints and not forms:
 
-            status("[-] No endpoints or forms found by crawler.")
+            appCtx.util.status("[-] No endpoints or forms found by crawler.")
             if not (args.xss_forms or args.xss_stored or args.xss_dom or args.fuzz_sqli or getattr(args, "all", False)):
                 return
 
@@ -155,19 +154,20 @@ def run(args):
         parsed = urlparse(args.start_url)
         base = f"{parsed.scheme}://{parsed.netloc}"
 
-        status(f"[+] Beginning fuzzing... \n")
+        appCtx.util.status(f"[+] Beginning fuzzing... \n")
 
         # Build shared context
         shared = {}
-        ctx = PhaseContext(
+        phaseCtx = PhaseContext(
             args=args,
-            cfg=cfg,
+            cfg=appCtx.cfg,
             endpoints=endpoints,
             forms=filteredForms,
             rawForms=rawForms,
             baseUrl=base,
             shared=shared,
-            log=log
+            log=log,
+            runtime= appCtx
         )
 
         def seqPhases(arg):
@@ -224,15 +224,15 @@ def run(args):
         selected = seqPhases(args)
 
         if not selected:
-            status("[-] No phases selected to run")
+            appCtx.util.status("[-] No phases selected to run")
             return
 
         out = []
         for phase in selected:
 
             try:
-                phase.prepare(ctx)
-                out = phase.run(ctx) or []
+                phase.prepare(phaseCtx)
+                out = phase.run(phaseCtx) or []
 
             except Exception:
                 log.debug("Phase failed", exc_info=True)
@@ -240,13 +240,13 @@ def run(args):
 
             finally:
                 try:
-                    phase.teardown(ctx)
+                    phase.teardown(phaseCtx)
                 except Exception:
                     log.debug("Phase teardown failed", exc_info=True)
             if out:
                 allVulnerabilities.extend(out)
 
-        allVulnerabilities = collapseDuplicates(allVulnerabilities)
+        allVulnerabilities = appCtx.util.collapse_duplicates(allVulnerabilities)
         fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
 
         if args.output_to_json:
@@ -263,11 +263,12 @@ def run(args):
             auth=args.auth,
             loginUsername=args.username,
             loginPassword=args.password,
-            loginPath=args.login_path
+            loginPath=args.login_path,
+            ctx=appCtx
         )
 
         results = fuzzer.run()
-        allVulnerabilities = collapseDuplicates(results)
+        allVulnerabilities = appCtx.util.collapse_duplicates(results)
         fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
         if args.output_to_json:
             fuzzerJson(allVulnerabilities, output_to_json=True)
@@ -284,9 +285,10 @@ def run(args):
             loginPassword=args.password,
             loginPath=args.login_path,
             auth=args.auth,
+            ctx = appCtx
         )
 
-        for p in getParents(urlparse(args.start_url).path):
+        for p in appCtx.util.get_parents(urlparse(args.start_url).path):
             res = fuzzer.run(path=p) or []
             results.extend(res)
 
@@ -304,11 +306,12 @@ def run(args):
             loginUsername=args.username,
             loginPassword=args.password,
             loginPath=args.login_path,
+            ctx=appCtx
         )
         res = fuzzer.run() or []
         results.extend(res)
 
-    allVulnerabilities = collapseDuplicates(results)
+    allVulnerabilities = appCtx.util.collapse_duplicates(results)
     fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
     if args.output_to_json:
         fuzzerJson(allVulnerabilities, output_to_json=True)

@@ -5,16 +5,17 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
 
-from uni_fuzzer.core.utility import get_cfg
+from ..core.utility import get_cfg
+from ..runtime.context import AppContext
 
 log = logging.getLogger(__name__)
 
 class AbstractFuzzer (ABC):
 
-    def __init__(self, baseUrl, session=None, headers =None, wordlistPath= None, bailEvent=None, cfg=None):
+    def __init__(self, baseUrl, session=None, headers =None, wordlistPath= None, bailEvent=None, cfg=None, ctx: AppContext | None = None):
         self.baseUrl = baseUrl
         self.wordlistPath = wordlistPath
-        self.cfg = cfg or get_cfg()
+        self.cfg = cfg or (ctx.cfg if ctx else get_cfg())
         self.headers = headers or {"User-Agent": self.cfg["http"]["user_agent"]}
         self.bailEvent = bailEvent
         self.session = session
