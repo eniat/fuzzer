@@ -3,7 +3,6 @@ import logging
 from urllib.parse import urlparse
 from pathlib import PurePosixPath
 
-from ..fuzzers.detection import detectPathTraversal
 from ..core.baseline import getBaseline
 
 from ..runtime.context import AppContext
@@ -152,7 +151,7 @@ class TraversalPathFuzzer(AbstractFuzzer):
         """
             Analyze the responses and return findings
         """
-        resultType, indicator = detectPathTraversal(response, self.baseline)
+        resultType, indicator = self.ctx.dete.detect_path_traversal(response, self.baseline)
         statusC = response.status_code
         meta = meta or {}
         payload = meta.get("payload")

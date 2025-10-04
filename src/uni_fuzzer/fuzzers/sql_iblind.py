@@ -2,7 +2,6 @@ import logging
 
 from urllib.parse import urlparse, quote
 
-from ..fuzzers.detection import detectSQLiBlind, detectSQLiDiff
 from ..core.baseline import sqliBaseline, getBlindBaseline
 
 from ..runtime.context import AppContext
@@ -304,7 +303,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
                     mid = len(trialElapses) // 2
                     testMs = trialElapses[mid] if len(trialElapses) % 2 == 1 else (trialElapses[mid - 1] + trialElapses[mid]) / 2.0
 
-                    if not detectSQLiBlind(baselineMs, testMs):
+                    if not self.ctx.dete.detect_sqli_blind(baselineMs, testMs):
                         continue
 
                     ckey = (url, method, tuple(sorted(fields)), target, payload)
@@ -350,7 +349,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
 
                         # Confirm the timing
                         testMs = res.elapsed.total_seconds() * 1000.0
-                        if not detectSQLiBlind(confirmBaseMs, testMs):
+                        if not self.ctx.dete.detect_sqli_blind(confirmBaseMs, testMs):
                             continue
 
                         # Record the confirmed payload
@@ -413,7 +412,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
 
         true, false = slot["bool_true"], slot["bool_false"]
 
-        if detectSQLiDiff(true["body"], false["body"], isNotSQLIBlind=False, true=true["cond"], false=false["cond"]):
+        if self.ctx.dete.detect_sqli_diff(true["body"], false["body"], is_not_sqli_blind=False, true=true["cond"], false=false["cond"]):
 
             # Check for slight absolute length change for less false positives
             sizeDelta = abs(len(true["body"]) - len(false["body"]))

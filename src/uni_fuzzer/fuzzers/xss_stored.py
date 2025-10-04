@@ -5,7 +5,6 @@ from uuid import uuid4
 from html import unescape
 
 from ..core.baseline import baselineForm
-from ..fuzzers.detection import detectXSS
 
 from ..runtime.context import AppContext
 from ..core.base_fuzzer import AbstractFuzzer
@@ -224,7 +223,7 @@ class StoredXSSFuzzer(AbstractFuzzer):
             if mlow not in low and mlow not in lowU and mlow not in lowQ:
                 return None
 
-        ok, indicator = detectXSS(body, self.token)
+        ok, indicator = self.ctx.dete.detect_xss(body, self.token)
 
         if not ok:
             return None

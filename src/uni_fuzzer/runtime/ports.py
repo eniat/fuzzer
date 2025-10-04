@@ -49,3 +49,26 @@ class UtilService(Protocol):
     def expand_time_token(self, payload: Optional[str], seconds: int | float = ...) -> str: ...
 
     def canary(self, payload: Optional[str], token: str) -> str: ...
+
+class DeteService(Protocol):
+    """
+        Port for Detection.py
+    """
+    def detect_xss(self, body: str, token: str) -> Tuple[bool, Optional[str]]: ...
+
+    def detect_sql_error(self, body: str) -> Tuple[bool, Optional[str]]: ...
+
+    def detect_sqli_blind(self, base_ms: float, test_ms: float,
+                          threshold_ms: Optional[int] = None,
+                          factor: Optional[float] = None) -> bool: ...
+
+    def detect_sqli_diff(self, base_html: str, html: str,
+                         is_not_sqli_blind: bool = True,
+                         true: Optional[str] = None,
+                         false: Optional[str] = None,
+                         payload: Optional[str] = None) -> bool: ...
+
+    def detect_path_traversal(self, response: "Response",
+                              baseline: Optional[dict] = None,
+                              similarity_skip_threshold: Optional[float] = None
+                              ) -> Tuple[str, Optional[Any]]: ...

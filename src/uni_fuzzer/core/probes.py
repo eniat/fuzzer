@@ -1,15 +1,15 @@
 import logging
+
 from html import unescape
 from urllib.parse import quote
 
-from ..fuzzers.detection import detectSQLiDiff
-
 from ..core.utility import get_cfg
+from ..runtime.ports import DeteService
 
 cfg = get_cfg()
 log = logging.getLogger(__name__)
 
-def probeReactivity(session, url, method, fields, fuzzField, headers):
+def probeReactivity(session, url, method, fields, fuzzField, headers, dete: DeteService | None = None):
     """
         Tests form to see if it is reactionary to avoid irrelevant fuzzing
     """
@@ -56,14 +56,14 @@ def probeReactivity(session, url, method, fields, fuzzField, headers):
             return True
 
         # Detect difference
-        if detectSQLiDiff(baseBody, body, payload=None):
+        if dete and dete.detect_sqli_diff(baseBody, body, payload=None):
             return True
 
         # Allow post forms with fuzzable fields
         if method == "POST":
             return True
 
-        if any(ind in baseBody.lower() for ind in cfg["sql"]["error_signatures"]):
+        if any(ind in baseBody.lower() for ind in cfg["sqli"]["error_signatures"]):
             return True
 
         # Check min change

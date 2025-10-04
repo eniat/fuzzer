@@ -3,7 +3,6 @@ import logging
 from urllib.parse import urlparse, quote
 
 from ..core.probes import probeReactivity
-from ..fuzzers.detection import detectSQLiDiff, detectSQLError
 from ..core.baseline import sqliBaseline
 
 from ..runtime.context import AppContext
@@ -191,7 +190,7 @@ class ParamSQLFuzzer(AbstractFuzzer):
 
 
         # Check for SQL Error
-        isErr, indicator = detectSQLError(body)
+        isErr, indicator = self.ctx.dete.detect_sql_error(body)
 
         baseLower = (baseText or "").lower()
         if isErr and indicator and indicator.lower() in baseLower:
@@ -231,7 +230,7 @@ class ParamSQLFuzzer(AbstractFuzzer):
                 return None
 
         # Check for valid SQLi ran code
-        if baseStatus and (statusC != baseStatus or detectSQLiDiff(baseText, body, payload=payload)):
+        if baseStatus and (statusC != baseStatus or self.ctx.dete.detect_sqli_diff(baseText, body, payload=payload)):
 
             pageKey = finUrl.split("?", 1)[0].split("#", 1)[0]
             resultsKey = (pageKey, method, target, "detected_sql_content", "sqli_inj")

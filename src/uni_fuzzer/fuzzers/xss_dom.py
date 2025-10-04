@@ -8,7 +8,6 @@ from selenium.webdriver.chrome.options import Options
 from requests.cookies import RequestsCookieJar
 
 from ..core.probes import probeDom
-from ..fuzzers.detection import detectXSS
 
 from ..runtime.context import AppContext
 from ..core.base_fuzzer import AbstractFuzzer
@@ -271,7 +270,7 @@ class DomXSSFuzzer(AbstractFuzzer):
                     # To resolve false positives for dom_storage
                     if indicator == "dom_storage":
                         src = driver.page_source or ""
-                        ok, _ = detectXSS(src, self.token)
+                        ok, _ = self.ctx.dete.detect_xss(src, self.token)
                         if not ok:
                             indicator = None
 

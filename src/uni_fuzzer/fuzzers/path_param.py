@@ -3,7 +3,6 @@ import logging
 
 from urllib.parse import urlparse, quote
 
-from ..fuzzers.detection import detectPathTraversal
 from ..core.baseline import getBaseline
 
 from ..runtime.context import AppContext
@@ -95,7 +94,7 @@ class ParamPathFuzzer(AbstractFuzzer):
         """
             Analyze the responses and return findings
         """
-        resultType, indicator = detectPathTraversal(response, self.baseline)
+        resultType, indicator = self.ctx.dete.detect_path_traversal(response, self.baseline)
 
         if resultType != "vulnerable":
             return None

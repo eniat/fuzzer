@@ -3,7 +3,6 @@ import logging
 from urllib.parse import urlparse, quote
 
 from ..core.probes import probeReactivity
-from ..fuzzers.detection import detectSQLiDiff, detectSQLError
 from ..core.baseline import sqliBaseline
 
 from uni_fuzzer.runtime.context import AppContext
@@ -200,11 +199,11 @@ class InjSQLFuzzer(AbstractFuzzer):
         freshText, freshStatus = sqliBaseline(self.session, self.headers, actionUrl, method, fields, util=self.ctx.util)
 
         # Check for SQL Error
-        isErr, indicator = detectSQLError(body)
+        isErr, indicator = self.ctx.dete.detect_sql_error(body)
 
         if isErr or (statusC != baseStatus and statusC >= 400):
 
-            fErr, _ = detectSQLError(freshText or "")
+            fErr, _ = self.ctx.dete.detect_sql_error(freshText or "")
             if fErr or (freshStatus != baseStatus and freshStatus >= 400):
                 log.debug("Second baseline matched (%s) false positive", actionUrl)
                 return None
@@ -235,8 +234,8 @@ class InjSQLFuzzer(AbstractFuzzer):
             return find
 
         # Check for valid SQLi ran code
-        freshTrips = (freshStatus != baseStatus) or detectSQLiDiff(baseText, freshText or "", payload=None)
-        if baseStatus and (statusC != baseStatus or detectSQLiDiff(baseText, body, payload=payload)):
+        freshTrips = (freshStatus != baseStatus) or self.ctx.dete.detect_sqli_diff(baseText, freshText or "", payload=None)
+        if baseStatus and (statusC != baseStatus or self.ctx.dete.detect_sqli_diff(baseText, body, payload=payload)):
             if freshTrips:
                 log.debug("Second baseline matched (%s) false positive", actionUrl)
                 return None
