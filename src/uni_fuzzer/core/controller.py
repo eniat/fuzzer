@@ -14,6 +14,7 @@ from ..adapters.auth_default import DefaultAuth
 from ..adapters.util_default import DefaultUtil
 from ..adapters.base_default import DefaultBase
 from ..adapters.dete_default import DefaultDete
+from ..adapters.prob_default import DefaultProb
 from ..runtime.context import AppContext
 from ..phases.fuzzer_phases import PhaseContext
 from ..phases.endpoints import EndpointsPhase
@@ -28,6 +29,7 @@ def build_ctx(args) -> AppContext:
     return AppContext(auth=DefaultAuth(util=util),
                       util=util,dete=DefaultDete(),
                       base=DefaultBase(),
+                      prob=DefaultProb(),
                       cfg= get_cfg(),args=args)
 
 def run(args):

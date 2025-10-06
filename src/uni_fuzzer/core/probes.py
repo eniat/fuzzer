@@ -9,7 +9,7 @@ from ..runtime.ports import DeteService
 cfg = get_cfg()
 log = logging.getLogger(__name__)
 
-def probeReactivity(session, url, method, fields, fuzzField, headers, dete: DeteService | None = None):
+def probeReactivity(session, url, method, fields, fuzzField, dete: "DeteService", headers):
     """
         Tests form to see if it is reactionary to avoid irrelevant fuzzing
     """

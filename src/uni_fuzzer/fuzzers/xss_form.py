@@ -4,8 +4,6 @@ from html import unescape
 from urllib.parse import urlparse, quote, unquote_plus, urljoin
 from uuid import uuid4
 
-from ..core.probes import probeReflexivity
-
 from ..runtime.context import AppContext
 from ..core.base_fuzzer import AbstractFuzzer
 from ..core.reporting import Finding
@@ -126,7 +124,7 @@ class FormXSSFuzzer(AbstractFuzzer):
 
             # Singular probe to check if reflective
             try:
-                if not probeReflexivity(self.session, url, method, fields, fuzzField, self.headers, self.token):
+                if not self.ctx.prob.probe_reflexivity(self.session, url, method, fields, fuzzField, self.headers, self.token):
                     log.debug("Form not reflective %s", url)
                     continue
 

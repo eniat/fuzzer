@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import Any
-from .ports import AuthService, UtilService, DeteService, BaseService
+from .ports import AuthService, UtilService, DeteService, BaseService, ProbService
 
 @dataclass
 class AppContext:
@@ -8,5 +8,6 @@ class AppContext:
     util: UtilService
     dete: DeteService
     base: BaseService
+    prob: ProbService
     cfg: dict[str, Any]
     args: Any

@@ -7,8 +7,6 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from requests.cookies import RequestsCookieJar
 
-from ..core.probes import probeDom
-
 from ..runtime.context import AppContext
 from ..core.base_fuzzer import AbstractFuzzer
 from ..core.reporting import Finding
@@ -256,7 +254,7 @@ class DomXSSFuzzer(AbstractFuzzer):
                     time.sleep(self.cfg["xss"]["dom_delay_seconds"])
 
                     # Check for DOM XSS
-                    flag = probeDom(driver, self.tokenLow)
+                    flag = self.ctx.prob.probe_dom(driver, self.tokenLow)
 
                     # Add specific indicators
                     indicator = None

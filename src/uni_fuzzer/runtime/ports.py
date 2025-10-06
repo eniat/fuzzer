@@ -81,8 +81,20 @@ class BaseService(Protocol):
 
     def get_baseline(self,session: requests.Session, url: str, headers: Optional[dict[str,str]] = None) -> dict[str, str] : ...
 
-    def sqli_baseline(self,session: requests.Session, endpoint : str, method: str , field: Optional[str],
+    def sqli_baseline(self,session: requests.Session, endpoint : str, method: str , field: list[str],
                       util: "UtilService", headers: Optional[dict[str,str]] = None) -> Tuple[str, int] :...
 
-    def get_blind_baseline(self,session: requests.Session, endpoint : str, method: str , field: Optional[str],
+    def get_blind_baseline(self,session: requests.Session, endpoint : str, method: str , field: list[str],
                            util: "UtilService", probes: Optional[int], headers: Optional[dict[str,str]] = None) -> float :...
+
+class ProbService(Protocol):
+    """
+        Port for Probes.py
+    """
+    def probe_reactivity(self, session: requests.Session, url: str, method: str, fields: list[str],
+                         fuzz_field: list[str], dete: Optional["DeteService"] = None, headers: Optional[dict[str,str]] = None) -> bool:...
+
+    def probe_dom(self, driver: Any, token_low: str) -> dict[str, bool]:...
+
+    def probe_reflexivity(self, session: requests.Session, url: str, method: str, fields: list[str], fuzz_field: str,
+                          token: str, headers: Optional[dict[str,str]] = None) -> bool: ...

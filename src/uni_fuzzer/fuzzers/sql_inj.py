@@ -2,8 +2,6 @@ import logging
 
 from urllib.parse import urlparse, quote
 
-from ..core.probes import probeReactivity
-
 from uni_fuzzer.runtime.context import AppContext
 from ..core.base_fuzzer import AbstractFuzzer
 from ..core.reporting import Finding
@@ -84,7 +82,7 @@ class InjSQLFuzzer(AbstractFuzzer):
             if not fuzzTargets:
                 continue
 
-            if not probeReactivity(self.session, url, method, fields, fuzzTargets, self.headers):
+            if not self.ctx.prob.probe_reactivity(self.session, url, method, fields, fuzzTargets, dete=self.ctx.dete, headers=self.headers):
                 continue
 
             # Get a baseline for later comparisons

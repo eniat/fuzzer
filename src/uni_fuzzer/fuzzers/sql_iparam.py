@@ -2,8 +2,6 @@ import logging
 
 from urllib.parse import urlparse, quote
 
-from ..core.probes import probeReactivity
-
 from ..runtime.context import AppContext
 from ..core.base_fuzzer import AbstractFuzzer
 from ..core.reporting import Finding
@@ -91,7 +89,7 @@ class ParamSQLFuzzer(AbstractFuzzer):
             # Get a baseline for later comparisons
             baseText, baseStatus = self.ctx.base.sqli_baseline(self.session, url, method, fields, util=self.ctx.util, headers= self.headers)
 
-            if not probeReactivity(self.session, url, method, fields, fuzzTargets, self.headers):
+            if not self.ctx.prob.probe_reactivity(self.session, url, method, fields, fuzzTargets, dete=self.ctx.dete, headers=self.headers):
                 continue
 
             self.targets.append({
