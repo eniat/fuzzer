@@ -5,7 +5,6 @@ from urllib.parse import urlparse, quote, unquote_plus, urljoin
 from uuid import uuid4
 
 from ..core.probes import probeReflexivity
-from ..core.baseline import baselineForm
 
 from ..runtime.context import AppContext
 from ..core.base_fuzzer import AbstractFuzzer
@@ -137,7 +136,7 @@ class FormXSSFuzzer(AbstractFuzzer):
 
             # Get baseline to check for submit buttons
             try:
-                base = baselineForm(self.session, url, self.headers)
+                base = self.ctx.base.baseline_form(self.session, url, self.headers)
                 baseHtml = base.get("content") or ""
             except Exception:
                 log.debug("baselineForm failed for %s", url, exc_info=True)

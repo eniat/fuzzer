@@ -1,5 +1,6 @@
-from typing import Optional, Any, Sequence
 import requests
+
+from typing import Optional, Any, Sequence
 
 from ..auth.auth import seleniumLogin, login, buildSessions
 from ..runtime.ports import AuthService, UtilService

@@ -72,3 +72,17 @@ class DeteService(Protocol):
                               baseline: Optional[dict] = None,
                               similarity_skip_threshold: Optional[float] = None
                               ) -> Tuple[str, Optional[Any]]: ...
+
+class BaseService(Protocol):
+    """
+        Port for Baseline.py
+    """
+    def baseline_form(self,session: requests.Session, url: str, headers: Optional[dict[str,str]] = None) -> dict[str] : ...
+
+    def get_baseline(self,session: requests.Session, url: str, headers: Optional[dict[str,str]] = None) -> dict[str, str] : ...
+
+    def sqli_baseline(self,session: requests.Session, endpoint : str, method: str , field: Optional[str],
+                      util: "UtilService", headers: Optional[dict[str,str]] = None) -> Tuple[str, int] :...
+
+    def get_blind_baseline(self,session: requests.Session, endpoint : str, method: str , field: Optional[str],
+                           util: "UtilService", probes: Optional[int], headers: Optional[dict[str,str]] = None) -> float :...

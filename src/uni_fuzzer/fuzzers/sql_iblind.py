@@ -2,8 +2,6 @@ import logging
 
 from urllib.parse import urlparse, quote
 
-from ..core.baseline import sqliBaseline, getBlindBaseline
-
 from ..runtime.context import AppContext
 from ..core.base_fuzzer import AbstractFuzzer
 from ..core.reporting import Finding
@@ -95,7 +93,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
             seen.add(tkey)
 
             # Get a baseline for later comparisons
-            baseText, baseStatus = sqliBaseline(self.session, self.headers, url, method, fields, util=self.ctx.util)
+            baseText, baseStatus = self.ctx.base.sqli_baseline(self.session, url, method, fields, util=self.ctx.util, headers=self.headers)
 
             self.targets.append({
                 "url": url,
@@ -237,7 +235,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
             url, method, fields = targ["url"], targ["method"], targ["fields"]
             baseText = targ["base_text"]
 
-            baselineMs = getBlindBaseline(self.session, self.headers, url, method, fields, util=self.ctx.util)
+            baselineMs = self.ctx.base.get_blind_baseline(self.session, url, method, fields, util=self.ctx.util, probes = self.cfg["sqli"]["timing_baseline_probes"] ,headers=self.headers)
 
             if baselineMs <= 0.0:
                 continue
@@ -314,7 +312,7 @@ class BlindSQLiFuzzer(AbstractFuzzer):
 
             # Check previous hits again serially to stop other payloads having a domino effect
             if confirmJobs:
-                    confirmBaseMs = getBlindBaseline(self.session, self.headers, url, method, fields, probes=self.TIMING_CONFIRM_PROBES, util=self.ctx.util) or baselineMs
+                    confirmBaseMs = self.ctx.base.get_blind_baseline(self.session, url, method, fields, probes=self.TIMING_CONFIRM_PROBES, util=self.ctx.util, headers = self.headers) or baselineMs
                     for (target, payload) in confirmJobs:
                         try:
                             if method == "POST":

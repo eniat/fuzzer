@@ -12,7 +12,8 @@ from ..core.reporting import crawlerPrint, fuzzerPrint, crawlerJson, fuzzerJson
 from ..core.utility import get_cfg
 from ..adapters.auth_default import DefaultAuth
 from ..adapters.util_default import DefaultUtil
-from uni_fuzzer.adapters.dete_default import DefaultDete
+from ..adapters.base_default import DefaultBase
+from ..adapters.dete_default import DefaultDete
 from ..runtime.context import AppContext
 from ..phases.fuzzer_phases import PhaseContext
 from ..phases.endpoints import EndpointsPhase
@@ -26,6 +27,7 @@ def build_ctx(args) -> AppContext:
     util = DefaultUtil()
     return AppContext(auth=DefaultAuth(util=util),
                       util=util,dete=DefaultDete(),
+                      base=DefaultBase(),
                       cfg= get_cfg(),args=args)
 
 def run(args):

@@ -3,8 +3,6 @@ import logging
 from urllib.parse import urlparse
 from pathlib import PurePosixPath
 
-from ..core.baseline import getBaseline
-
 from ..runtime.context import AppContext
 from ..core.base_fuzzer import AbstractFuzzer
 from ..core.reporting import Finding
@@ -55,7 +53,7 @@ class TraversalPathFuzzer(AbstractFuzzer):
 
     def prepare(self, ctx):
         if self.baseline is None:
-            self.baseline = getBaseline(self.session, self.baseUrl, self.headers)
+            self.baseline = self.ctx.base.get_baseline(self.session, self.baseUrl, self.headers)
 
     def  run(self, ctx=None, path=None, currDepth=0):
         """

@@ -3,7 +3,6 @@ import logging
 from urllib.parse import urlparse, quote
 
 from ..core.probes import probeReactivity
-from ..core.baseline import sqliBaseline
 
 from uni_fuzzer.runtime.context import AppContext
 from ..core.base_fuzzer import AbstractFuzzer
@@ -89,7 +88,7 @@ class InjSQLFuzzer(AbstractFuzzer):
                 continue
 
             # Get a baseline for later comparisons
-            baseText, baseStatus = sqliBaseline(self.session, self.headers, url, method, fields, util=self.ctx.util)
+            baseText, baseStatus = self.ctx.base.sqli_baseline(self.session, url, method, fields, util=self.ctx.util, headers=self.headers)
 
             self.targets.append({
                 "url": url,
@@ -196,7 +195,7 @@ class InjSQLFuzzer(AbstractFuzzer):
         actionUrl = meta.get("origin_url") or finUrl.split("?", 1)[0]
 
         # Fresh baseline to double check
-        freshText, freshStatus = sqliBaseline(self.session, self.headers, actionUrl, method, fields, util=self.ctx.util)
+        freshText, freshStatus = self.ctx.base.sqli_baseline(self.session, actionUrl, method, fields, util=self.ctx.util, headers=self.headers)
 
         # Check for SQL Error
         isErr, indicator = self.ctx.dete.detect_sql_error(body)

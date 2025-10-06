@@ -8,8 +8,6 @@ from ..runtime.ports import UtilService
 cfg = get_cfg()
 log = logging.getLogger(__name__)
 
-TIMING_BASELINE_PROBES = cfg["sqli"]["timing_baseline_probes"]
-
 def baselineForm(session, url, headers):
     """
         Fetch form to deduce summit buttons
@@ -91,7 +89,7 @@ def sqliBaseline( session, headers, endpoint, method, fields, util: "UtilService
         log.debug("sqliBaseline failed for %s %s", method, endpoint, exc_info=True)
         return "",0
 
-def getBlindBaseline(session, headers, endpoint, method, fields, util: "UtilService", probes=TIMING_BASELINE_PROBES):
+def getBlindBaseline(session, headers, endpoint, method, fields, util: "UtilService", probes):
     """
         Get time baseline for blind SQLi timing
     """
