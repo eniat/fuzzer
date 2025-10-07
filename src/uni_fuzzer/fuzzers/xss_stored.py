@@ -14,6 +14,7 @@ class StoredXSSFuzzer(AbstractFuzzer):
     """
         Submits payload then revisits to see if payload still there
     """
+    name: str = "xss_stored"
 
     def __init__(self, baseUrl, wordlistPath=None, session=None, bailEvent=None, cfg=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None, token=None, headers=None, ctx: AppContext | None = None):
         super().__init__(baseUrl=baseUrl, session=session, headers=headers, wordlistPath=wordlistPath, bailEvent=bailEvent, cfg=cfg)

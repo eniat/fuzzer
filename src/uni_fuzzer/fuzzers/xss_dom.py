@@ -17,6 +17,7 @@ class DomXSSFuzzer(AbstractFuzzer):
     """
         Submits payload via query then loads and checks JS for payload
     """
+    name: str = "xss_dom"
 
     def __init__(self, baseUrl, session=None, bailEvent=None, cfg=None, auth=False, loginUsername=None, loginPassword=None, loginPath=None, token=None, headers=None, headless=True, ctx: AppContext | None = None):
         super().__init__(baseUrl=baseUrl, session=session, headers=headers, bailEvent=bailEvent, cfg=cfg)

@@ -13,6 +13,7 @@ class ParamPathFuzzer(AbstractFuzzer):
     """
         Fuzz query params
     """
+    name: str = "param"
 
     def __init__(self, baseUrl, wordlistPath=None, loginUsername=None, loginPassword=None,loginPath=None, session=None, auth=None, bailEvent=None,cfg=None, ctx: AppContext | None = None):
 

@@ -5,10 +5,6 @@ from urllib.parse import urlparse, urljoin
 from pathlib import PurePosixPath
 from uuid import uuid4
 
-from ..fuzzers.path_traversal import TraversalPathFuzzer
-from ..fuzzers.path_param import ParamPathFuzzer
-from ..fuzzers.xss_param import ParamXSSFuzzer
-
 from ..phases.fuzzer_phases import FuzzerPhase, PhaseContext
 
 log = logging.getLogger(__name__)
@@ -101,7 +97,8 @@ class EndpointsPhase (FuzzerPhase):
                 ctx.runtime.util.status(f"[Thread] Path Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
 
-                path_fuzzer = TraversalPathFuzzer(
+                path_fuzzer = ctx.runtime.fuzz.create(
+                    "path",
                     baseUrl=fullUrl,
                     wordlistPath= self.wordlistPathsParams,
                     session=sess,
@@ -109,21 +106,21 @@ class EndpointsPhase (FuzzerPhase):
                     bailEvent=bail,
                     ctx=ctx.runtime
                 )
-                path_fuzzer.visitedPaths = ctx.shared["globalVisitedPaths"]
-                path_fuzzer.visitedFuzzPaths = ctx.shared["globalVisitedFuzzPaths"]
-                path_fuzzer.lock = ctx.shared["globalVisitedLock"]
+                setattr(path_fuzzer, "visitedPaths", ctx.shared["globalVisitedPaths"])
+                setattr(path_fuzzer, "visitedFuzzPaths", ctx.shared["globalVisitedFuzzPaths"])
+                setattr(path_fuzzer, "lock", ctx.shared["globalVisitedLock"])
 
                 for path in ctx.runtime.util.get_parents(urlparse(fullUrl).path):
                     path_fuzzer.run(path=path)
 
-                if path_fuzzer.vulnerablePaths:
-                    results.extend(list(path_fuzzer.vulnerablePaths.values()))
-
-                if args.report_all and getattr(path_fuzzer, "interesting200", None):
-                    results.extend(path_fuzzer.interesting200)
-
-                if args.report_all and getattr(path_fuzzer, "interesting", None):
-                    results.extend(path_fuzzer.interesting)
+                vulnerablePaths = getattr(path_fuzzer, "vulnerablePaths", {})
+                if vulnerablePaths:
+                    results.extend(list(vulnerablePaths.values()))
+                if args.report_all:
+                    interesting200 = getattr(path_fuzzer, "interesting200", None)
+                    if interesting200: results.extend(interesting200)
+                    interesting = getattr(path_fuzzer, "interesting", None)
+                    if interesting: results.extend(interesting)
 
             if self.run_params and params:
 
@@ -134,7 +131,8 @@ class EndpointsPhase (FuzzerPhase):
                 ctx.runtime.util.status(f"[Thread] Param Fuzzing: {fuzzedUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
 
-                param_fuzzer = ParamPathFuzzer(
+                param_fuzzer = ctx.runtime.fuzz.create(
+                    "param",
                     baseUrl=fuzzedUrl,
                     wordlistPath=self.wordlistPathsParams,
                     session=sess,
@@ -157,7 +155,8 @@ class EndpointsPhase (FuzzerPhase):
                 ctx.runtime.util.status(f"[Thread] XSS Param Fuzzing: {fuzzedUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
 
-                xss_param_fuzzer = ParamXSSFuzzer(
+                xss_param_fuzzer = ctx.runtime.fuzz.create(
+                    "xss_param",
                     baseUrl=fuzzedUrl,
                     wordlistPath=self.wordlistXss,
                     session=sess,

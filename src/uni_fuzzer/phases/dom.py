@@ -3,8 +3,6 @@ import threading
 
 from uuid import uuid4
 
-from ..fuzzers.xss_dom import DomXSSFuzzer
-
 from ..phases.fuzzer_phases import FuzzerPhase, PhaseContext
 
 log = logging.getLogger(__name__)
@@ -53,7 +51,8 @@ class DomXSSPhase(FuzzerPhase):
 
         try:
             bail = threading.Event() if args.bail_on_hit else None
-            xss_dom_fuzzer = DomXSSFuzzer(
+            xss_dom_fuzzer = ctx.runtime.fuzz.create(
+                "xss_dom",
                 baseUrl=args.start_url,
                 headless=not args.no_headless,
                 session=domSess,

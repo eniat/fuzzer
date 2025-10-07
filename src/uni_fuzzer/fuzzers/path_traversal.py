@@ -10,11 +10,11 @@ from ..core.reporting import Finding
 
 log = logging.getLogger(__name__)
 
-
 class TraversalPathFuzzer(AbstractFuzzer):
     """
         Fuzz the URL path using the payload
     """
+    name: str = "path"
 
     def __init__(self, baseUrl, wordlistPath=None, maxDepth=None, loginUsername=None, loginPassword=None,loginPath=None, session=None, auth=None, bailEvent=None,cfg=None, ctx: AppContext | None = None):
 

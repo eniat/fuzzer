@@ -5,11 +5,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urljoin
 from uuid import uuid4
 
-from ..fuzzers.xss_stored import StoredXSSFuzzer
-from ..fuzzers.xss_form import FormXSSFuzzer
-from ..fuzzers.sql_inj import InjSQLFuzzer
-from ..fuzzers.sql_iblind import BlindSQLiFuzzer
-
 from ..phases.fuzzer_phases import FuzzerPhase, PhaseContext
 
 log = logging.getLogger(__name__)
@@ -71,7 +66,9 @@ class FormsPhase (FuzzerPhase):
 
                 ctx.runtime.util.status(f"[Thread] XSS Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
-                xss_form_fuzzer = FormXSSFuzzer(
+
+                xss_form_fuzzer = ctx.runtime.fuzz.create(
+                    "xss_form",
                     baseUrl=fullUrl,
                     wordlistPath=self.wordlistXss,
                     session=sess,
@@ -91,7 +88,9 @@ class FormsPhase (FuzzerPhase):
 
                 ctx.runtime.util.status(f"[Thread] XSS Stored Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
-                xss_stored_fuzzer = StoredXSSFuzzer(
+
+                xss_stored_fuzzer = ctx.runtime.fuzz.create(
+                    "xss_stored",
                     baseUrl=fullUrl,
                     wordlistPath=self.wordlistXss,
                     session=sess,
@@ -110,7 +109,9 @@ class FormsPhase (FuzzerPhase):
 
                 ctx.runtime.util.status(f"[Thread] SQLi Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
-                sqli_form_fuzzer = InjSQLFuzzer(
+
+                sqli_form_fuzzer = ctx.runtime.fuzz.create(
+                    "sqli",
                     baseUrl=fullUrl,
                     wordlistPath=self.wordlistSqli,
                     session=sess,
@@ -128,7 +129,9 @@ class FormsPhase (FuzzerPhase):
 
                 ctx.runtime.util.status(f"[Thread] SQLi Blind Form Fuzzing: {fullUrl}")
                 bail = threading.Event() if args.bail_on_hit else None
-                sqli_blind_fuzzer = BlindSQLiFuzzer(
+
+                sqli_blind_fuzzer = ctx.runtime.fuzz.create(
+                    "sqli_blind",
                     baseUrl=fullUrl,
                     wordlistPath=self.wordlistSqli,
                     session=sess,

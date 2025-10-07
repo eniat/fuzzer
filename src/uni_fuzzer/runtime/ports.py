@@ -98,3 +98,37 @@ class ProbService(Protocol):
 
     def probe_reflexivity(self, session: requests.Session, url: str, method: str, fields: list[str], fuzz_field: str,
                           token: str, headers: Optional[dict[str,str]] = None) -> bool: ...
+
+class RepoService(Protocol):
+    """
+        Port for Reporting.py
+    """
+    def crawler_print(self, endpoints: Optional[list[dict]], forms: Optional[list[dict]], output_to_file: bool = False,
+                      file_name: str = "crawler-output.txt") -> None: ...
+
+    def fuzzer_print(self, vulnerabilities: Optional[list[Finding]], output_to_file: bool = False,
+                     file_name: str = "fuzzer-output.txt") -> None: ...
+
+    def crawler_json(self, endpoints: Optional[list[dict]], forms: Optional[list[dict]], output_to_json: bool = False,
+                     file_name: str ="crawler-output.json") -> None: ...
+
+    def fuzzer_json(self, vulnerabilities: Optional[list[Finding]], output_to_json: bool = False,
+                    file_name: str ="fuzzer-output.json" ) -> None: ...
+
+class Fuzzer(Protocol):
+    """
+        Port for the fuzzers
+    """
+    name: str
+
+    def prepare(self, ctx : Any) -> None: ...
+
+    def run(self, ctx: Optional[Any] = None, **kwargs: Any) -> list[Finding]: ...
+
+class FuzzService(Protocol):
+    """
+        Factory for the fuzzers
+    """
+    def create(self, kind: str, **kwargs: Any) -> Fuzzer: ...
+
+    def has(self, kind: str) -> bool: ...

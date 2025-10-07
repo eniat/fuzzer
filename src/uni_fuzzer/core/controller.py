@@ -3,11 +3,7 @@ import logging
 from urllib.parse import urlparse
 
 from ..crawler.crawler import Crawler
-from ..fuzzers.path_traversal import TraversalPathFuzzer
-from ..fuzzers.path_param import ParamPathFuzzer
 from ..llm.semantic_llm import filterML
-from ..fuzzers.xss_param import ParamXSSFuzzer
-from ..core.reporting import crawlerPrint, fuzzerPrint, crawlerJson, fuzzerJson
 
 from ..core.utility import get_cfg
 from ..adapters.auth_default import DefaultAuth
@@ -15,6 +11,8 @@ from ..adapters.util_default import DefaultUtil
 from ..adapters.base_default import DefaultBase
 from ..adapters.dete_default import DefaultDete
 from ..adapters.prob_default import DefaultProb
+from ..adapters.repo_default import DefaultRepo
+from ..adapters.fuzz_default import DefaultFuzz
 from ..runtime.context import AppContext
 from ..phases.fuzzer_phases import PhaseContext
 from ..phases.endpoints import EndpointsPhase
@@ -30,6 +28,8 @@ def build_ctx(args) -> AppContext:
                       util=util,dete=DefaultDete(),
                       base=DefaultBase(),
                       prob=DefaultProb(),
+                      repo=DefaultRepo(),
+                      fuzz=DefaultFuzz(),
                       cfg= get_cfg(),args=args)
 
 def run(args):
@@ -116,9 +116,9 @@ def run(args):
 
         endpoints, forms = crawler.crawl(args.start_url)
 
-        crawlerPrint(endpoints, forms, output_to_file=args.output_to_file)
+        appCtx.repo.crawler_print(endpoints, forms, output_to_file=args.output_to_file)
         if args.output_to_json:
-            crawlerJson(endpoints, forms, output_to_json=True)
+            appCtx.repo.crawler_json(endpoints, forms, output_to_json=True)
         return
 
     if args.use_crawler:
@@ -140,9 +140,9 @@ def run(args):
         )
         endpoints, forms = crawler.crawl(args.start_url)
 
-        crawlerPrint(endpoints, forms, output_to_file=args.output_to_file)
+        appCtx.repo.crawler_print(endpoints, forms, output_to_file=args.output_to_file)
         if args.output_to_json:
-            crawlerJson(endpoints, forms, output_to_json=True)
+            appCtx.repo.crawler_json(endpoints, forms, output_to_json=True)
 
         rawForms = forms[:]
 
@@ -254,16 +254,17 @@ def run(args):
                 allVulnerabilities.extend(out)
 
         allVulnerabilities = appCtx.util.collapse_duplicates(allVulnerabilities)
-        fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
+        appCtx.repo.fuzzer_print(allVulnerabilities, output_to_file=args.output_to_file)
 
         if args.output_to_json:
-            fuzzerJson(allVulnerabilities, output_to_json=True)
+            appCtx.repo.fuzzer_json(allVulnerabilities, output_to_json=True)
         return
 
     # Fuzz a single target
     if args.xss_params:
 
-        fuzzer = ParamXSSFuzzer(
+        fuzzer = appCtx.fuzz.create(
+            "xss_param",
             baseUrl=args.start_url,
             wordlistPath=wordlistXss,
             session=None,
@@ -276,15 +277,16 @@ def run(args):
 
         results = fuzzer.run()
         allVulnerabilities = appCtx.util.collapse_duplicates(results)
-        fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
+        appCtx.repo.fuzzer_print(allVulnerabilities, output_to_file=args.output_to_file)
         if args.output_to_json:
-            fuzzerJson(allVulnerabilities, output_to_json=True)
+            appCtx.repo.fuzzer_json(allVulnerabilities, output_to_json=True)
         return
 
     results = []
 
     if args.fuzz_paths:
-        fuzzer = TraversalPathFuzzer(
+        fuzzer = appCtx.fuzz.create(
+            "path",
             baseUrl=args.start_url,
             wordlistPath=wordlistPathsParams,
             session=None,
@@ -299,13 +301,17 @@ def run(args):
             res = fuzzer.run(path=p) or []
             results.extend(res)
 
-        if args.report_all and getattr(fuzzer, "interesting200", None):
-            results.extend(fuzzer.interesting200)
-        if args.report_all and getattr(fuzzer, "interesting", None):
-            results.extend(fuzzer.interesting)
+        if args.report_all:
+            interesting200 = getattr(fuzzer, "interesting200", None)
+            if interesting200:
+                results.extend(interesting200)
+            interesting = getattr(fuzzer, "interesting", None)
+            if interesting:
+                results.extend(interesting)
 
     if args.fuzz_params:
-        fuzzer = ParamPathFuzzer(
+        fuzzer = appCtx.fuzz.create(
+            "param",
             baseUrl=args.start_url,
             wordlistPath=wordlistPathsParams,
             session=None,
@@ -319,6 +325,6 @@ def run(args):
         results.extend(res)
 
     allVulnerabilities = appCtx.util.collapse_duplicates(results)
-    fuzzerPrint(allVulnerabilities, output_to_file=args.output_to_file)
+    appCtx.repo.fuzzer_print(allVulnerabilities, output_to_file=args.output_to_file)
     if args.output_to_json:
-        fuzzerJson(allVulnerabilities, output_to_json=True)
+        appCtx.repo.fuzzer_json(allVulnerabilities, output_to_json=True)

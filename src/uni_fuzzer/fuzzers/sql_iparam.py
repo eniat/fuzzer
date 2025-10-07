@@ -12,6 +12,7 @@ class ParamSQLFuzzer(AbstractFuzzer):
     """
         Takes the endpoints retrieved by the crawler and fuzzes them for SQLi vulnerabilities
     """
+    name: str = "sqli_param"
 
     def __init__(self, baseUrl, wordlistPath=None, session=None, bailEvent=None, cfg=None, auth=False,loginUsername=None, loginPassword=None, loginPath=None,headers=None, ctx: AppContext | None = None):
         super().__init__(baseUrl=baseUrl, session=session, headers=headers, wordlistPath=wordlistPath,bailEvent=bailEvent, cfg=cfg)
