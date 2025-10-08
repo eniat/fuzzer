@@ -2,7 +2,7 @@ import logging
 
 from urllib.parse import urlparse
 
-from ..crawler.crawler import Crawler
+from ..crawler.dynamic_crawler import Crawler
 from ..llm.semantic_llm import filterML
 
 from ..core.utility import get_cfg
