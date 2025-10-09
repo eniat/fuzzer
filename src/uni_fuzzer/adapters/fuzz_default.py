@@ -19,12 +19,11 @@ class DefaultFuzz(FuzzService):
             "xss_form": FormXSSFuzzer,
             "xss_stored": StoredXSSFuzzer,
             "xss_param": ParamXSSFuzzer,
-
             "xss_dom": DomXSSFuzzer,
             "sqli": InjSQLFuzzer,
             "sqli_blind": BlindSQLiFuzzer,
             "path": TraversalPathFuzzer,
-            "param": ParamPathFuzzer,
+            "param": ParamPathFuzzer
         }
 
     def has(self, kind: str) -> bool:

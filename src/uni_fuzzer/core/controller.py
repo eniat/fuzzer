@@ -2,7 +2,6 @@ import logging
 
 from urllib.parse import urlparse
 
-from ..crawler.dynamic_crawler import Crawler
 from ..llm.semantic_llm import filterML
 
 from ..core.utility import get_cfg
@@ -13,6 +12,7 @@ from ..adapters.dete_default import DefaultDete
 from ..adapters.prob_default import DefaultProb
 from ..adapters.repo_default import DefaultRepo
 from ..adapters.fuzz_default import DefaultFuzz
+from ..adapters.craw_default import DefaultCraw
 from ..runtime.context import AppContext
 from ..phases.fuzzer_phases import PhaseContext
 from ..phases.endpoints import EndpointsPhase
@@ -30,6 +30,7 @@ def build_ctx(args) -> AppContext:
                       prob=DefaultProb(),
                       repo=DefaultRepo(),
                       fuzz=DefaultFuzz(),
+                      craw=DefaultCraw(),
                       cfg= get_cfg(),args=args)
 
 def run(args):
@@ -101,8 +102,8 @@ def run(args):
             and not args.fuzz_sqli_b
             and not getattr(args, "all", False)):
 
-        crawler = Crawler(
-            mode=args.crawler_mode,
+        crawler = appCtx.craw.create(
+            kind=args.crawler_mode,
             maxPages=args.max_pages,
             rateLimit=args.rate_limit,
             headless= not args.no_headless,
@@ -114,7 +115,7 @@ def run(args):
         )
 
 
-        endpoints, forms = crawler.crawl(args.start_url)
+        endpoints, forms = crawler.run(args.start_url)
 
         appCtx.repo.crawler_print(endpoints, forms, output_to_file=args.output_to_file)
         if args.output_to_json:
@@ -127,8 +128,8 @@ def run(args):
 
         appCtx.util.status("\n[+] Using crawler to discover endpoints and forms...")
 
-        crawler = Crawler(
-            mode= args.crawler_mode,
+        crawler = appCtx.craw.create(
+            kind= args.crawler_mode,
             maxPages= args.max_pages,
             rateLimit= args.rate_limit,
             headless=not args.no_headless,
@@ -138,7 +139,7 @@ def run(args):
             loginPath=args.login_path,
             ctx=appCtx
         )
-        endpoints, forms = crawler.crawl(args.start_url)
+        endpoints, forms = crawler.run(args.start_url)
 
         appCtx.repo.crawler_print(endpoints, forms, output_to_file=args.output_to_file)
         if args.output_to_json:
