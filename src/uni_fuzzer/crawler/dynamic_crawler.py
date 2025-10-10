@@ -85,7 +85,28 @@ class DynamicCrawler(BaseCrawler):
                 visited.add(urlN)
                 driver.get(urlN)
 
-                WebDriverWait(driver, cfg["crawler"]["dom_wait"]).until(expected_conditions.presence_of_element_located((By.TAG_NAME, "body")))
+                try:
+                    WebDriverWait(driver, cfg["crawler"]["dom_wait"]).until(expected_conditions.presence_of_element_located((By.TAG_NAME, "body")))
+                except Exception:
+                    log.debug("DOM wait timed out", exc_info=True)
+
+                # If there's a collapsible menu try to open it
+                try:
+                    menuButton = driver.find_element(By.CSS_SELECTOR, "[aria-label='Open Menu'], .burger")
+                    menuButton.click()
+                    WebDriverWait(driver, 0.5).until(
+                        expected_conditions.presence_of_element_located((By.TAG_NAME, "body")))
+
+                except Exception:
+                    log.debug("Menu expand click failed", exc_info=True)
+                    pass
+
+                # Log current page as endpoint
+                curN = urldefrag(driver.current_url)[0]
+                cur = urlparse(curN)
+                curPath = cur.path or "/"
+
+                endpointsMap.setdefault((curPath, "GET"), set()).update(parse_qs(cur.query).keys())
 
                 # Extract links
                 for a in driver.find_elements(By.TAG_NAME, "a"):

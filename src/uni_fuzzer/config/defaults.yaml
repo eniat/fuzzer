@@ -21,7 +21,7 @@ concurrency:
 
 crawler:
   mode_default: "both"
-  max_pages_default: 20
+  max_pages_default: 50
   rate_limit_default: 0.2
   headless_default: true
   option_capacity: 80
@@ -43,6 +43,7 @@ crawler:
     - "max_file_size"
     - "upload"
     - "change"
+  dom_wait: 0.5
 
 fuzz:
   max_depth_default: 3
