@@ -6,7 +6,7 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 
 ## To‑Do List
 
-- [ ] **Remove imports of concrete classes**  
+- [x] **Remove imports of concrete classes**  
   Remove the imports of my own concrete classes and make them go via an adapter/ interfaces / Services
 
 - [ ] **Add return/ parameters annotations to functions**  

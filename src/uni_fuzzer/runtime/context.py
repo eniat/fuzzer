@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from typing import Any
 
-from .ports import AuthService, UtilService, DeteService, BaseService, ProbService, RepoService, FuzzService, CrawService
+from .ports import (AuthService, UtilService, DeteService,
+                    BaseService, ProbService, RepoService,
+                    FuzzService, CrawService, LLMService)
 
 
 @dataclass
@@ -14,5 +16,6 @@ class AppContext:
     repo: RepoService
     fuzz: FuzzService
     craw: CrawService
+    llm: LLMService
     cfg: dict[str, Any]
     args: Any

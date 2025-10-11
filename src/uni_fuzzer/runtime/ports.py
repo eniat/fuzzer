@@ -115,6 +115,12 @@ class RepoService(Protocol):
     def fuzzer_json(self, vulnerabilities: Optional[list[Finding]], output_to_json: bool = False,
                     file_name: str ="fuzzer-output.json" ) -> None: ...
 
+class LLMService(Protocol):
+    """
+        Port for Semantic_llm.py
+    """
+    def filter_ml(self, wordlist_path: Path, prompt: str, similarity: Optional[float] = None, util: Optional[Any] = None) -> list[str]:...
+
 class Fuzzer(Protocol):
     """
         Port for the fuzzers

@@ -2,8 +2,6 @@ import logging
 
 from urllib.parse import urlparse
 
-from ..llm.semantic_llm import filterML
-
 from ..core.utility import get_cfg
 from ..adapters.auth_default import DefaultAuth
 from ..adapters.util_default import DefaultUtil
@@ -13,6 +11,7 @@ from ..adapters.prob_default import DefaultProb
 from ..adapters.repo_default import DefaultRepo
 from ..adapters.fuzz_default import DefaultFuzz
 from ..adapters.craw_default import DefaultCraw
+from ..adapters.llm_default import DefaultLLM
 from ..runtime.context import AppContext
 from ..phases.fuzzer_phases import PhaseContext
 from ..phases.endpoints import EndpointsPhase
@@ -31,6 +30,7 @@ def build_ctx(args) -> AppContext:
                       repo=DefaultRepo(),
                       fuzz=DefaultFuzz(),
                       craw=DefaultCraw(),
+                      llm=DefaultLLM(),
                       cfg= get_cfg(),args=args)
 
 def run(args):
@@ -69,7 +69,7 @@ def run(args):
     if args.llm:
         try:
             appCtx.util.status(f"[+]Filtering wordlist using LLM prompt:'{args.llm}'")
-            filtered = filterML(args.wordlist, args.llm, similarityThreshold=0.4, util=appCtx.util)
+            filtered = appCtx.llm.filter_ml(args.wordlist, args.llm, util=appCtx.util)
 
             if not filtered:
                 appCtx.util.status("[-] No payloads matched the LLM prompt")

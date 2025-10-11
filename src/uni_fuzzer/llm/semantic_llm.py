@@ -1,10 +1,12 @@
 import logging
 
 from sentence_transformers import SentenceTransformer, util as sUtil
+from ..core.utility import get_cfg
 
+cfg = get_cfg()
 log = logging.getLogger(__name__)
 
-def filterML(wordlistPath, prompt, similarityThreshold=0.25, util=None):
+def filterML(wordlistPath, prompt, similarityThreshold=cfg["llm"]["similarity"], util=None):
     """
         Filter a wordlist using semantic similarity to a prompt.
     """
