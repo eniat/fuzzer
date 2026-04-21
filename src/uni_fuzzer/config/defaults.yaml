@@ -1,5 +1,5 @@
 http:
-  user_agent: "uni-fuzzer/0.1 (+https://example.local)"
+  user_agent: "uni-fuzzer/0.1 (local testing)"
   add_referer: true
   timeout_get_seconds: 5
   timeout_post_seconds: 5
@@ -60,10 +60,8 @@ fuzz:
     - step
     - create_db
     - btnclear
-    - btnsign
     - rememberme
     - captcha
-    - default
     - security_level
     - bug
     - mail_activation
@@ -195,7 +193,6 @@ paths:
     - "button"
     - "search"
     - "btnsign"
-    - "btnclear"
     - "save"
     - "ok"
     - "login"
@@ -212,9 +209,9 @@ auth:
     long: 10
 
   selectors:
-    username_field: "login"
+    username_field: "username" # 'username' for DVWA and 'login' for bWAPP
     password_field: "password"
-    submit_name: "form"
+    submit_name: "Login" # 'Login' for DVWA and 'form' for bWAPP
 
 llm:
   similarity: 0.25
