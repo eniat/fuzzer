@@ -12,6 +12,9 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 - [ ] **Add return/ parameters annotations to functions**  
   Add return/ parameters annotations to functions to give greater understanding.
 
+- [ ] **Update sql_iparam**  
+  Finish implementing parameter based SQLi fuzzing.
+
 - [ ] **Add a domain scope to target fuzzing**  
   Add a scope that the crawlers and fuzzers stay inside for more refined fuzzing.
 
@@ -299,23 +302,6 @@ Findings are normalized and deduplicated by `collapseDuplicates`. Each finding f
 - **Stored XSS** collapses by `(type, host, path, indicator)` and caps `payload_samples`.
 - **Path/Param traversal** collapses by normalized path.
 - The **highest** observed `status_code` within a group is preserved. Counts & unique samples are aggregated.
-
----
-
-## Architecture
-
-- `crawler/` → discovers endpoints & forms.
-- `fuzzers/path.py` → path traversal + recursion into interesting 200s.
-- `fuzzers/xss.py` → reflected/stored/DOM XSS with tokenized canaries and DOM probes.
-- `fuzzers/sqli.py` → content/error SQLi + blind boolean/timing with confirmation.
-- `core/baseline.py` → baselines for comparators (XSS forms, SQLi, timing baselines).
-- `core/probes.py` → reflexivity/DOM reactivity probes.
-- `core/utility.py` → config, wordlists, helpers, duplicate collapsing.
-- `core/reporting.py` → `Finding` model + pretty/JSON reporting.
-- `auth/auth.py` → session login + Selenium login helpers.
-- `controller` (`run(args)`) → orchestrates phases, session pools, and output.
-
-Threading is used throughout via `ThreadPoolExecutor`, concurrency is controlled centrally from config.
 
 ---
 
