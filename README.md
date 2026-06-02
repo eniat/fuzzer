@@ -42,7 +42,6 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 - [Configuration](#configuration)
 - [CLI Usage](#cli-usage)
 - [What Gets Reported](#what-gets-reported)
-- [Architecture](#architecture)
 - [Performance Tips](#performance-tips)
 
 ---
