@@ -75,8 +75,8 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 Clone the repo and install in editable (dev) mode:
 
 ```bash
-git clone https://github.com/eniat/fuzzer uni_fuzzer
-cd uni_fuzzer
+git clone https://github.com/eniat/fuzzer fuzzer
+cd fuzzer
 python -m venv .venv && source .venv/bin/activate 
 pip install -U pip
 pip install -e .

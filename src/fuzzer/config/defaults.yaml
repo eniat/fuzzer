@@ -1,5 +1,5 @@
 http:
-  user_agent: "uni-fuzzer/0.1 (local testing)"
+  user_agent: "fuzzer/0.1 (local testing)"
   add_referer: true
   timeout_get_seconds: 5
   timeout_post_seconds: 5
