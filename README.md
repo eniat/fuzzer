@@ -4,37 +4,6 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 
 ---
 
-## To‑Do List
-
-- [x] **Remove imports of concrete classes**  
-  Remove the imports of my own concrete classes and make them go via an adapter/ interfaces / Services
-
-- [ ] **Add return/ parameters annotations to functions**  
-  Add return/ parameters annotations to functions to give greater understanding.
-
-- [ ] **Update sql_iparam**  
-  Finish implementing parameter based SQLi fuzzing.
-
-- [ ] **Add a domain scope to target fuzzing**  
-  Add a scope that the crawlers and fuzzers stay inside for more refined fuzzing.
-
-- [ ] **Add tests**  
-  pytests folder that includes tests for multiple functions and the whole thing.
-
-- [ ] **Config validation**  
-  UIsing pydantic implement a config validation to make sure whats given is correct.
-
-- [ ] **Implement mutations**  
-  Start and build custom mutation strategies.
-
-- [ ] **Improve CLI UX**  
-  Add CLI art, loading animations, and progress bars.
-
-- [ ] **Explore OpenAI prompting**  
-  Integrate LLM prompting depending on cost and time.
-
----
-
 ## Table of Contents
 
 - [Features](#features)
@@ -312,3 +281,29 @@ Findings are normalized and deduplicated by `collapseDuplicates`. Each finding f
 - DOM XSS runs a real browser; try `--no-headless` locally to debug.
 
 ---
+
+## Security and Usage Notes
+
+This project is intended for authorised security testing, local lab environments, and portfolio demonstration only.
+
+Only run this tool against applications, systems, or networks that you own or have explicit permission to test. Do not use it against public websites, third-party services, university systems, employer systems, or production environments without written authorisation.
+
+The fuzzer may generate high volumes of requests and may trigger security alerts, rate limits, logging, account lockouts, or application errors. Use conservative settings when testing and avoid running it against fragile or shared systems.
+
+This tool is designed to support defensive security learning and web application testing. It should not be used for unauthorised vulnerability discovery, exploitation, disruption, data extraction, or any activity that could harm systems or users.
+
+Any included payloads, wordlists, scanner integrations, or proof-of-concept checks are provided for controlled testing only. They are intended to help identify and understand common web application weaknesses such as injection flaws, traversal issues, and input validation problems in authorised environments.
+
+The project is not hardened for deployment as a public service. It should be run locally or in a controlled lab environment only. Configuration files, target URLs, scan results, logs, and reports should be reviewed before committing to ensure they do not contain sensitive information.
+
+The author is not responsible for misuse of this software. Users are responsible for ensuring that their testing complies with applicable laws, policies, and authorisation boundaries.
+
+---
+
+## Usage Notice
+
+This repository is provided for portfolio and review purposes only.
+
+All rights are reserved. No permission is granted to copy, redistribute, submit, or reuse this work, in whole or in part, for academic coursework, assessment, or commercial purposes.
+
+Where this repository relates to university coursework, it is shared only to demonstrate my own technical work and should not be used by other students as a submission or solution.
