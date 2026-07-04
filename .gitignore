@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.log
+uni-fuzzer.log
+
+# Generated output
+reports/
+outputs/
+results/
+*.json
+*.out
+
+# Downloaded third-party/local wordlists
+src/fuzzer/resources/wordlists/*
+!src/fuzzer/resources/wordlists/README.md
