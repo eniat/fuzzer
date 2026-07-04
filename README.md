@@ -68,7 +68,7 @@ You may have to edit the selectors based on the login page of the webapp. That c
 Crawler + all fuzzers in sequence, with auth and full reporting:
 
 ```bash
-fuzz https://target.tld --auth --username user --password password --login-path /login.php --swordlist sql --xwordlist XSS-Jhaddix --pwordlist LFI-Jhaddix--all --use-crawler --report-all --output-to-file
+fuzz https://target.tld --auth --username user --password password --login-path /login.php --swordlist sql --xwordlist XSS-Jhaddix --pwordlist LFI-Jhaddix --all --use-crawler --report-all --output-to-file
 ```
 
 What happens:
@@ -78,7 +78,7 @@ What happens:
 3. Deduplicate and print findings; optional JSON/file outputs if flags provided.
 
 ### Focused runs
->Extra wordlists can be uploaded into src/uni_fuzzer/resources/wordlists and then used with any of the wordlist CLI commands and the shortened name without the .txt
+>Extra wordlists can be uploaded into src/fuzzer/resources/wordlists and then used with any of the wordlist CLI commands and the shortened name without the .txt
 
 **Path traversal only (with crawler)**
 
@@ -239,7 +239,7 @@ Below are the most commonly used flags:
   - Everything: `--all`
 - Output & behavior
   - `--output-to-file` (save console output to file too)
-  - `--report-to-json` (emit machine-readable JSON)
+  - `--output-to-json` (emit machine-readable JSON)
   - `--report-all` (include “interesting” 200s and potential SQL)
   - `--bail-on-hit` (stop a given thread early on the first confirmed vulnerability)
 - Auth
