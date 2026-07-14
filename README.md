@@ -302,6 +302,6 @@ The author is not responsible for misuse of this software. Users are responsible
 
 ---
 
-## Licence
+## License
 
 This project is licensed under the MIT Licence. See the `LICENSE` file for details.
