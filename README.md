@@ -13,7 +13,7 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 - [What Gets Reported](#what-gets-reported)
 - [Performance Tips](#performance-tips)
 - [Security and Usage Notes](#security-and-usage-notes)
-- [Usage Notice](#usage-notice)
+- [License](#license)
 
 ---
 ## Features
@@ -302,8 +302,6 @@ The author is not responsible for misuse of this software. Users are responsible
 
 ---
 
-## Usage Notice
+## Licence
 
-This repository is provided for portfolio and review purposes only.
-
-All rights are reserved. No permission is granted to copy, redistribute, submit, or reuse this work, in whole or in part, for academic coursework, assessment, or commercial purposes.
+This project is licensed under the MIT Licence. See the `LICENSE` file for details.
