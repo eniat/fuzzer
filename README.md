@@ -1,7 +1,7 @@
  # Fuzzer Project
  ![tests](https://github.com/eniat/fuzzer/actions/workflows/tests.yml/badge.svg)
 
-Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzzers for **Path Traversal**, **XSS** (params, forms, stored, DOM), and **SQL Injection** (error/content-based and blind timing/boolean).
+Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzzers for **Path Traversal**, **XSS** (params, forms, stored and DOM), and **SQL Injection** (error/content-based and blind timing/boolean).
 
 ---
 
