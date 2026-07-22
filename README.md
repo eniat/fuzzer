@@ -1,4 +1,4 @@
- # Fuzzer Project
+# Integrated Crawler-Fuzzer for Web Vulnerability Testing
  ![tests](https://github.com/eniat/fuzzer/actions/workflows/tests.yml/badge.svg)
 
 Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzzers for **Path Traversal**, **XSS** (params, forms, stored and DOM), and **SQL Injection** (error/content-based and blind timing/boolean).
@@ -12,6 +12,7 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 - [Configuration](#configuration)
 - [CLI Usage](#cli-usage)
 - [What Gets Reported](#what-gets-reported)
+- [Benchmark Results](#benchmark-results)
 - [Performance Tips](#performance-tips)
 - [Security and Usage Notes](#security-and-usage-notes)
 - [License](#license)
@@ -273,6 +274,94 @@ Findings are normalized and deduplicated by `collapseDuplicates`. Each finding f
 - **Stored XSS** collapses by `(type, host, path, indicator)` and caps `payload_samples`.
 - **Path/Param traversal** collapses by normalized path.
 - The **highest** observed `status_code` within a group is preserved. Counts & unique samples are aggregated.
+
+---
+
+## Benchmark Results
+
+This tool was evaluated against five established scanners (OWASP ZAP, SQLMap,
+Dalfox, XSSer and wfuzz) across two deliberately vulnerable applications, DVWA
+and bWAPP. Every tool ran under an identical, fully automated harness: the same
+crawl-derived input set, containerised targets reset between runs, three runs per
+tool per target, and manual replay to confirm each finding against a documented
+ground-truth set.
+
+The evaluation deliberately tested **unattended, scope-aligned automation** rather
+than hand-tuned single-target runs. That framing matters for reading the numbers
+below, and is discussed under "Why the baselines returned zero".
+
+### Effectiveness (F1, higher is better)
+
+| Class | Target | This tool | Best baseline | Baseline result |
+|---|---|---|---|---|
+| XSS | DVWA | **0.67** | 0.00 | ZAP / Dalfox / XSSer all 0 |
+| XSS | bWAPP | **0.53** | 0.15 | Dalfox (precision 1.00, recall 0.08) |
+| SQLi | DVWA | **0.80** | 0.00 | SQLMap / ZAP both 0 |
+| SQLi | bWAPP | **0.55** | 0.00 | SQLMap / ZAP both 0 |
+| Path traversal | DVWA | **1.00** | 0.00 | wfuzz / ZAP both 0 |
+| Path traversal | bWAPP | **0.67** | 0.00 | wfuzz / ZAP both 0 |
+
+This tool produced confirmed true positives across every class and both targets.
+The baselines produced confirmed findings in only one cell of the table.
+
+Recall is reported against the full documented ground truth, including
+vulnerability instances outside this project's scope (DOM-based execution,
+multi-step workflows). Against the in-scope subset the tool is built to detect,
+recall is higher, so these figures are a conservative floor rather than a ceiling.
+Because detection is wordlist-driven, recall is also bounded by payload coverage;
+mutation-based generation (future work) would relax that.
+
+### Where the baselines did better
+
+Honesty matters more than a clean sweep here. On bWAPP XSS, **Dalfox achieved
+perfect precision (1.00) against this tool's 0.90** it never raised a false
+positive. It did so by reporting almost nothing: 2 findings against a ground truth
+of 24, for a recall of 0.08. This tool detected 9, trading a single false positive
+for far higher recall and a better F1 (0.53 vs 0.15). Which you prefer depends on
+whether you are optimising for a quiet report or for coverage.
+
+### Efficiency (time per confirmed vulnerability)
+
+Raw runtime is misleading, because the fastest tools were fast partly by finding
+nothing. ZAP finished a DVWA SQLi run in 38 seconds with zero true positives.
+Time-per-true-positive is the fairer measure:
+
+| Class | Target | This tool | Fastest baseline with TP > 0 |
+|---|---|---|---|
+| XSS | bWAPP | 0:15 | Dalfox, 5:00 |
+| SQLi | bWAPP | 0:33 | none |
+| XSS | DVWA | 0:41 | none |
+
+This tool was rarely the fastest in wall-clock terms, but it was the only tool
+returning confirmed findings quickly enough for the runtime to mean anything.
+
+### Why the baselines returned zero
+
+This is the most important caveat, and reading this section on it will
+tell you more than the tables. The baselines were not run in their strongest
+single-target configuration; they were run unattended across whole applications
+under automation. Under those conditions:
+
+- **Session and authentication handling dominated.** Cookies and sessions expired
+  during longer runs even with repeated logins, cutting the baselines off from the
+  vulnerable pages. This tool's integrated session management was built specifically
+  to survive this, which is a large part of why it scored where the baselines did not.
+- **Several tools are not designed for fully automated whole-app scanning** at this
+  scale, and needed per-page invocation that limited concurrency.
+- **Strict default confirmation** suppressed borderline findings in some baselines.
+
+So these results should be read as **"an integrated pipeline with session handling
+outperforms off-the-shelf scanners under unattended, scope-aligned automation"**,
+not as a claim that this tool is a better vulnerability detector than SQLMap or ZAP
+in absolute terms. Given a single target and manual configuration, a specialist tool
+may well match or beat it.
+
+### What this demonstrates
+
+Integration. One pipeline spanning crawl, fuzz, confirm and report, with shared
+session state meaningfully improves *practical* automated coverage across
+multiple vulnerability classes, at a moderate runtime cost and with false positives
+that are traceable to specific, documented causes.
 
 ---
 
