@@ -13,6 +13,7 @@ Web fuzzing toolkit with **crawlers** (both dynamic and static) and focused fuzz
 - [CLI Usage](#cli-usage)
 - [What Gets Reported](#what-gets-reported)
 - [Benchmark Results](#benchmark-results)
+- [Screenshots](#screenshots)
 - [Performance Tips](#performance-tips)
 - [Security and Usage Notes](#security-and-usage-notes)
 - [License](#license)
@@ -362,6 +363,34 @@ Integration. One pipeline spanning crawl, fuzz, confirm and report, with shared
 session state meaningfully improves *practical* automated coverage across
 multiple vulnerability classes, at a moderate runtime cost and with false positives
 that are traceable to specific, documented causes.
+
+---
+
+## Screenshots
+
+Crawler discovery. The tool authenticates, launches a headless browser and maps the target's attack surface (110 endpoints, 99 forms on a local bWAPP instance).
+
+![Crawler discovery](docs/crawler-discovery.png)
+
+Live findings. Confirmed vulnerabilities printed to the console as the fuzzers run, here blind SQL injection detected by both boolean and timing indicators.
+
+![CLI findings output](docs/cli-findings.png)
+
+Crawler output. Discovered endpoints and forms normalised into the scan input set the fuzzers consume.
+
+![Crawler output](docs/crawler-output.png)
+
+Reflected XSS finding. Payload, match indicator, status and response evidence, all replayable.
+
+![XSS finding](docs/xss-finding.png)
+
+Blind SQL injection finding. Detected by response timing (OR SLEEP) rather than error output, with the payloads tried recorded.
+
+![Blind SQLi finding](docs/sqli-blind-finding.png)
+
+Path traversal finding. A confirmed out-of-directory file read, recorded with the payload and detection indicator.
+
+![Path traversal finding](docs/path-traversal-finding.png)
 
 ---
 
